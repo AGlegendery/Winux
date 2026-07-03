@@ -494,16 +494,16 @@ ask_hardware_options() {
     log "Install NVIDIA: $INSTALL_NVIDIA"
 }
 
-select_disk() {
+# در تابع run_live_install، خط disk="$(select_disk)" رو حذف کن و بجاش:
+
+select_disk_interactive() {
     WINUX_PHASE="disk-selection"
 
-    {
-        echo
-        echo -e "${C_MAGENTA}${C_BOLD}============================================================${C_RESET}"
-        echo -e "${C_MAGENTA}${C_BOLD}                    SELECT TARGET DISK                       ${C_RESET}"
-        echo -e "${C_MAGENTA}${C_BOLD}============================================================${C_RESET}"
-        echo
-    } >&2
+    echo
+    echo -e "${C_MAGENTA}${C_BOLD}============================================================${C_RESET}"
+    echo -e "${C_MAGENTA}${C_BOLD}                    SELECT TARGET DISK                       ${C_RESET}"
+    echo -e "${C_MAGENTA}${C_BOLD}============================================================${C_RESET}"
+    echo
 
     local -a disk_paths=()
     local -a disk_info=()
@@ -521,32 +521,28 @@ select_disk() {
 
     local i=1
     for info in "${disk_info[@]}"; do
-        echo -e "  ${C_GREEN}${C_BOLD}[$i]${C_RESET} $info" >&2
+        echo -e "  ${C_GREEN}${C_BOLD}[$i]${C_RESET} $info"
         ((i++))
     done
 
-    {
-        echo
-        echo -e "${C_CYAN}Enter the number of the disk you want to install to.${C_RESET}"
-        echo -e "${C_CYAN}Example: to pick option 1, type ${C_BOLD}1${C_RESET}${C_CYAN} and press Enter.${C_RESET}"
-        echo
-    } >&2
+    echo
+    echo -e "${C_CYAN}Enter the number of the disk you want to install to.${C_RESET}"
+    echo -e "${C_CYAN}Example: to pick option 1, type ${C_BOLD}1${C_RESET}${C_CYAN} and press Enter.${C_RESET}"
+    echo
 
-    local choice disk
+    local choice
     while true; do
         read -r -p "$(echo -e "${C_BOLD}Your choice: ${C_RESET}")" choice
 
         if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#disk_paths[@]} )); then
-            disk="${disk_paths[$((choice-1))]}"
-            break
+            SELECTED_DISK="${disk_paths[$((choice-1))]}"
+            [[ -b "$SELECTED_DISK" ]] || die "Invalid block device: $SELECTED_DISK"
+            log "Selected disk: $SELECTED_DISK"
+            return 0
         else
-            echo -e "${C_RED}Invalid choice. Enter a number between 1 and ${#disk_paths[@]}.${C_RESET}" >&2
+            echo -e "${C_RED}Invalid choice. Enter a number between 1 and ${#disk_paths[@]}.${C_RESET}"
         fi
     done
-
-    [[ -b "$disk" ]] || die "Invalid block device: $disk"
-
-    echo "$disk"
 }
 
 
@@ -866,7 +862,8 @@ run_live_install() {
     root_b64="$(printf '%s' "$root_pass" | base64 -w0)"
     user_b64="$(printf '%s' "$user_pass" | base64 -w0)"
 
-    disk="$(select_disk)"
+    select_disk_interactive
+    disk="$SELECTED_DISK"
 
     partition_disk "$disk"
     pacstrap_base
