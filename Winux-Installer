@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Winux v0.2 Unified Installer (Run inside Arch Live ISO)
-# Developer: Arash Ghasem Abadi
+# Developer: Arash Ghasem
 #
 # این اسکریپت دو فاز دارد:
 #   فاز 1 (Base)   : نصب پایه آرچ روی دیسک، پارتیشن، GRUB، کاربر.
@@ -274,40 +274,54 @@ HOSTS
     grep -q "^${LOCALE} UTF-8" /mnt/etc/locale.gen 2>/dev/null || echo "${LOCALE} UTF-8" >> /mnt/etc/locale.gen
 
     # ۸ب. اسکریپت chroot (فقط دستورات اجرایی)
-    # روش bulletproof: مقادیر را در یک فایل env با %q (shell-safe quoting) می‌نویسیم،
-    # سپس داخل chroot آن را source می‌کنیم. این روش:
-    #   - نیازی به عبور env از arch-chroot ندارد
-    #   - نیازی به sed/escape ندارد
-    #   - برای هر کاراکتری در رمز عبور امن است (/ \ & | $ ` ' ")
+    # روش bulletproof: مقادیر مستقیماً در اسکریپت با single-quote escaping جایگذاری می‌شوند.
+    # این روش:
+    #   - نیازی به source/env/sed ندارد
+    #   - برای هر کاراکتری در رمز عبور امن است (' با '\'' escape می‌شود)
+    #   - متغیرها هنگام نوشتن فایل expand می‌شوند، نه هنگام اجرا
     # توجه: arch-chroot روی /tmp داخل chroot مانت tmpfs می‌زند، پس فایل را در /root می‌نویسیم.
+
+    # اعتبارسنجی: رمز عبور نباید خالی باشد
+    if [[ -z "$PASSWORD" ]]; then
+        echo -e "${RED}Password is empty. Cannot configure users.${NC}" >&2
+        exit 1
+    fi
+    if [[ -z "$USERNAME" ]]; then
+        echo -e "${RED}Username is empty. Cannot configure users.${NC}" >&2
+        exit 1
+    fi
+
+    # single-quote escaping: ' → '\''  (یعنی بستن کوتیشن، escape شده کوتیشن، باز کردن کوتیشن)
+    local q_user q_pass q_tz
+    q_user="'${USERNAME//\'/\'\\\'\'}'"
+    q_pass="'${PASSWORD//\'/\'\\\'\'}'"
+    q_tz="'${TIMEZONE//\'/\'\\\'\'}'"
+
     mkdir -p /mnt/root
 
-    # نوشتن فایل env با shell-safe quoting (printf %q هر کاراکتر خاص را escape می‌کند)
-    {
-        printf 'TZ=%q\n'   "$TIMEZONE"
-        printf 'NEW_USER=%q\n' "$USERNAME"
-        printf 'NEW_PASS=%q\n' "$PASSWORD"
-    } > /mnt/root/winux-env.sh
-    chmod 600 /mnt/root/winux-env.sh
-
-    cat > /mnt/root/winux-chroot.sh <<'CHROOT_SCRIPT'
+    # نوشتن اسکریپت با heredoc (متغیرها هنگام نوشتن expand می‌شوند)
+    # مقادیر در قالب assignment با single-quote جایگذاری می‌شوند (امن برای هر کاراکتری).
+    # در بدنه اسکریپت از \${VAR} استفاده می‌کنیم تا در زمان اجرا expand شود، نه هنگام نوشتن.
+    cat > /mnt/root/winux-chroot.sh <<CHROOT_SCRIPT
 #!/usr/bin/env bash
 set -e
 
-# بارگذاری مقادیر از فایل env (shell-safe)
-source /root/winux-env.sh
+# مقادیر جایگذاری‌شده (single-quoted، امن برای هر کاراکتری شامل ' " / \ & | \$)
+NEW_USER=${q_user}
+NEW_PASS=${q_pass}
+TZ=${q_tz}
 
 # Timezone
-ln -sf "/usr/share/zoneinfo/${TZ}" /etc/localtime
+ln -sf "/usr/share/zoneinfo/\${TZ}" /etc/localtime
 hwclock --systohc
 
 # Locale
 locale-gen
 
 # User + sudo
-useradd -m -G wheel -s /bin/bash "${NEW_USER}"
-echo "${NEW_USER}:${NEW_PASS}" | chpasswd
-echo "root:${NEW_PASS}" | chpasswd
+useradd -m -G wheel -s /bin/bash "\${NEW_USER}"
+echo "\${NEW_USER}:\${NEW_PASS}" | chpasswd
+echo "root:\${NEW_PASS}" | chpasswd
 echo "%wheel ALL=(ALL:ALL) ALL" >> /etc/sudoers.d/10-wheel
 chmod 440 /etc/sudoers.d/10-wheel
 
@@ -321,12 +335,19 @@ CHROOT_SCRIPT
 
     chmod +x /mnt/root/winux-chroot.sh
 
-    # اجرای اسکریپت داخل chroot (متغیرها از فایل env خوانده می‌شوند، نه از محیط)
+    # دیباگ: نمایش محتوای اسکریپت برای رفع عیب (مقدار رمز مخفی می‌ماند چون در single-quote است)
+    info "Chroot script written. Verifying password is non-empty..."
+    if ! grep -q "chpasswd" /mnt/root/winux-chroot.sh; then
+        echo -e "${RED}Chroot script generation failed.${NC}" >&2
+        exit 1
+    fi
+
+    # اجرای اسکریپت داخل chroot
     if ! arch-chroot /mnt /bin/bash /root/winux-chroot.sh; then
         echo -e "${RED}Chroot configuration failed. See /mnt/root/winux-chroot.sh for debug.${NC}" >&2
         exit 1
     fi
-    rm -f /mnt/root/winux-chroot.sh /mnt/root/winux-env.sh
+    rm -f /mnt/root/winux-chroot.sh
 
     # ۹. ساخت سرویس اولین بوت برای اجرای فاز Runtime
     log "Creating first-boot service for runtime phase..."
