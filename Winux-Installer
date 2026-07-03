@@ -247,47 +247,49 @@ CONF
     cp -- "$0" /mnt/usr/local/bin/winux-installer.sh
     chmod +x /mnt/usr/local/bin/winux-installer.sh
 
-    # ۸. کانفیگ داخل chroot
-    # روش ایمن: اسکریپت chroot را به‌صورت فایل موقت می‌سازیم (متغیرها در shell بیرونی جایگذاری می‌شوند)،
-    # سپس در chroot اجرا می‌کنیم. این از مشکل heredoc تودرتو و expand نشدن متغیرها جلوگیری می‌کند.
-    log "Configuring system inside chroot..."
+    # ۸. کانفیگ سیستم
+    # روش ایمن: فایل‌های متنی را مستقیماً روی /mnt می‌نویسیم (بیرون از chroot، بدون مشکل heredoc).
+    # فقط دستوراتی که نیاز به chroot دارند (locale-gen, useradd, chpasswd, grub) داخل chroot اجرا می‌شوند.
+    # متغیرها به‌صورت آرگومان‌های محیطی به chroot پاس داده می‌شوند تا از expand نشدن جلوگیری شود.
+    log "Configuring system (filesystem writes outside chroot)..."
 
-    # ساخت بلوک hosts (خارج از chroot)
-    local net_hosts_block
+    # ۸الف. نوشتن فایل‌های متنی مستقیماً روی /mnt/etc (امن، بدون sed برای multiline)
+    echo "$HOSTNAME" > /mnt/etc/hostname
+
     if [[ "$NETWORK_MODE" == "recommended" ]]; then
-        net_hosts_block="127.0.0.1   localhost
+        cat > /mnt/etc/hosts <<HOSTS
+127.0.0.1   localhost
 ::1         localhost
-127.0.0.1   ${HOSTNAME}.localdomain ${HOSTNAME}"
+127.0.0.1   ${HOSTNAME}.localdomain ${HOSTNAME}
+HOSTS
     else
-        net_hosts_block="127.0.0.1   localhost
-::1         localhost"
+        cat > /mnt/etc/hosts <<HOSTS
+127.0.0.1   localhost
+::1         localhost
+HOSTS
     fi
 
-    # نوشتن اسکریپت chroot به فایل (متغیرها اکنون جایگذاری شده‌اند)
-    # استفاده از cat با quoted delimiter برای نوشتن فایل، سپس جایگذاری متغیرها با sed
+    echo "${HOSTNAME}" > /mnt/etc/hostname
+    echo "LANG=${LOCALE}" > /mnt/etc/locale.conf
+    grep -q "^${LOCALE} UTF-8" /mnt/etc/locale.gen 2>/dev/null || echo "${LOCALE} UTF-8" >> /mnt/etc/locale.gen
+
+    # ۸ب. اسکریپت chroot (فقط دستورات اجرایی، بدون جایگذاری متن پیچیده)
+    # متغیرها از طریق env به chroot پاس داده می‌شوند (arch-chroot از env پشتیبانی می‌کند).
     cat > /mnt/tmp/winux-chroot.sh <<'CHROOT_SCRIPT'
 #!/usr/bin/env bash
 set -e
 
 # Timezone
-ln -sf /usr/share/zoneinfo/__TIMEZONE__ /etc/localtime
+ln -sf "/usr/share/zoneinfo/${TZ}" /etc/localtime
 hwclock --systohc
 
 # Locale
-echo "__LOCALE__ UTF-8" >> /etc/locale.gen
 locale-gen
-echo "LANG=__LOCALE__" > /etc/locale.conf
-
-# Hostname
-echo "__HOSTNAME__" > /etc/hostname
-cat > /etc/hosts <<'NET'
-__HOSTS_BLOCK__
-NET
 
 # User + sudo
-useradd -m -G wheel -s /bin/bash __USERNAME__
-echo "__USERNAME__:__PASSWORD__" | chpasswd
-echo "root:__PASSWORD__" | chpasswd
+useradd -m -G wheel -s /bin/bash "${NEW_USER}"
+echo "${NEW_USER}:${NEW_PASS}" | chpasswd
+echo "root:${NEW_PASS}" | chpasswd
 echo "%wheel ALL=(ALL:ALL) ALL" >> /etc/sudoers.d/10-wheel
 chmod 440 /etc/sudoers.d/10-wheel
 
@@ -299,29 +301,12 @@ sed -i 's/GRUB_TIMEOUT_STYLE=menu/GRUB_TIMEOUT_STYLE=hidden/' /etc/default/grub
 grub-mkconfig -o /boot/grub/grub.cfg
 CHROOT_SCRIPT
 
-    # جایگذاری متغیرها با sed (امن در برابر کاراکترهای خاص)
-    # ابتدا کاراکترهای خاص در رمز عبور را escape می‌کنیم برای sed
-    local esc_pass esc_user esc_host esc_tz esc_locale esc_hosts
-    esc_pass="${PASSWORD//\\/\\\\}"; esc_pass="${esc_pass//\//\\/}"; esc_pass="${esc_pass//&/\\&}"
-    esc_user="${USERNAME//\\/\\\\}"; esc_user="${esc_user//\//\\/}"; esc_user="${esc_user//&/\\&}"
-    esc_host="${HOSTNAME//\\/\\\\}"; esc_host="${esc_host//\//\\/}"; esc_host="${esc_host//&/\\&}"
-    esc_tz="${TIMEZONE//\\/\\\\}"; esc_tz="${esc_tz//\//\\/}"; esc_tz="${esc_tz//&/\\&}"
-    esc_locale="${LOCALE//\\/\\\\}"; esc_locale="${esc_locale//\//\\/}"; esc_locale="${esc_locale//&/\\&}"
-    esc_hosts="${net_hosts_block//\\/\\\\}"; esc_hosts="${esc_hosts//&/\\&}"
-
-    sed -i \
-        -e "s|__TIMEZONE__|${esc_tz}|g" \
-        -e "s|__LOCALE__|${esc_locale}|g" \
-        -e "s|__HOSTNAME__|${esc_host}|g" \
-        -e "s|__USERNAME__|${esc_user}|g" \
-        -e "s|__PASSWORD__|${esc_pass}|g" \
-        -e "s|__HOSTS_BLOCK__|${esc_hosts}|g" \
-        /mnt/tmp/winux-chroot.sh
-
     chmod +x /mnt/tmp/winux-chroot.sh
 
-    # اجرای اسکریپت داخل chroot
-    if ! arch-chroot /mnt /bin/bash /tmp/winux-chroot.sh; then
+    # اجرای اسکریپت داخل chroot با متغیرهای محیطی (env از طریق arch-chroot منتقل می‌شود)
+    # password/user تکی‌خط هستند و در env امن‌اند (نه در سطر دستور sed).
+    if ! env TZ="$TIMEZONE" NEW_USER="$USERNAME" NEW_PASS="$PASSWORD" \
+        arch-chroot /mnt /bin/bash /tmp/winux-chroot.sh; then
         echo -e "${RED}Chroot configuration failed. See /mnt/tmp/winux-chroot.sh for debug.${NC}" >&2
         exit 1
     fi
