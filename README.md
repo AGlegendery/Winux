@@ -5,6 +5,11 @@ Boot your Arch from Iso
 type this command 
 and wait
 ```
-curl -sSL https://raw.githubusercontent.com/AGlegendery/Winux/refs/heads/main/Winux-Installer | bash
+curl -O https://raw.githubusercontent.com/AGlegendery/Winux/refs/heads/main/Winux-Installer
+```
+and
+```
+chmod +x ./Winux-Installer
+./Winux-Installer
 ```
 congrats your winux is ready
