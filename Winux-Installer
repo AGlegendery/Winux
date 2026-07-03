@@ -32,6 +32,41 @@ SELECTED_DE="kde"
 INSTALL_NVIDIA="no"
 
 # -----------------------------
+# Colors (cosmetic only)
+# -----------------------------
+
+if [[ -t 1 ]]; then
+    C_RESET="\e[0m"
+    C_BOLD="\e[1m"
+    C_RED="\e[31m"
+    C_GREEN="\e[32m"
+    C_YELLOW="\e[33m"
+    C_BLUE="\e[34m"
+    C_MAGENTA="\e[35m"
+    C_CYAN="\e[36m"
+    C_WHITE="\e[97m"
+else
+    C_RESET=""; C_BOLD=""; C_RED=""; C_GREEN=""; C_YELLOW=""
+    C_BLUE=""; C_MAGENTA=""; C_CYAN=""; C_WHITE=""
+fi
+
+print_banner() {
+    echo -e "${C_CYAN}${C_BOLD}"
+    cat <<'EOF'
+ _       ___                     ____              __  _
+| |     / (_)___  __  ___  __   / __ \__  ______  / /_(_)___ ___  ___
+| | /| / / / __ \/ / / / |/_/  / /_/ / / / / __ \/ __/ / __ `__ \/ _ \
+| |/ |/ / / / / / /_/ />  <   / _, _/ /_/ / / / / /_/ / / / / / /  __/
+|__/|__/_/_/ /_/\__,_/_/|_|  /_/ |_|\__,_/_/ /_/\__/_/_/ /_/ /_/\___/
+
+EOF
+    echo -e "${C_RESET}${C_YELLOW}${C_BOLD}          Winux Installer v${VERSION}${C_RESET}"
+    echo -e "${C_BLUE}     Arch Linux + Desktop Environment + Wine Runtime${C_RESET}"
+    echo -e "${C_MAGENTA}------------------------------------------------------------${C_RESET}"
+    echo
+}
+
+# -----------------------------
 # Logging
 # -----------------------------
 
@@ -92,10 +127,10 @@ ask() {
     local answer
 
     if [[ -n "$default" ]]; then
-        read -r -p "$prompt [$default]: " answer
+        read -r -p "$(echo -e "${C_BOLD}${prompt}${C_RESET} [${C_YELLOW}${default}${C_RESET}]: ")" answer
         echo "${answer:-$default}"
     else
-        read -r -p "$prompt: " answer
+        read -r -p "$(echo -e "${C_BOLD}${prompt}${C_RESET}: ")" answer
         echo "$answer"
     fi
 }
@@ -105,18 +140,18 @@ ask_secret() {
     local a b
 
     while true; do
-        read -r -s -p "$prompt: " a
+        read -r -s -p "$(echo -e "${C_BOLD}${prompt}${C_RESET}: ")" a
         echo
-        read -r -s -p "Repeat $prompt: " b
+        read -r -s -p "$(echo -e "${C_BOLD}Repeat ${prompt}${C_RESET}: ")" b
         echo
 
         if [[ -z "$a" ]]; then
-            echo "Password cannot be empty."
+            echo -e "${C_RED}Password cannot be empty.${C_RESET}"
             continue
         fi
 
         if [[ "$a" != "$b" ]]; then
-            echo "Passwords do not match."
+            echo -e "${C_RED}Passwords do not match.${C_RESET}"
             continue
         fi
 
@@ -129,9 +164,9 @@ confirm_danger() {
     local prompt="$1"
     local answer
     echo
-    echo "!!! DANGER !!!"
-    echo "$prompt"
-    read -r -p "Type EXACTLY 'YES' to continue: " answer
+    echo -e "${C_RED}${C_BOLD}!!! DANGER !!!${C_RESET}"
+    echo -e "${C_RED}${prompt}${C_RESET}"
+    read -r -p "$(echo -e "${C_BOLD}Type EXACTLY 'YES' to continue: ${C_RESET}")" answer
     [[ "$answer" == "YES" ]] || die "User aborted."
 }
 
@@ -273,14 +308,14 @@ print_unavailable_report() {
     local -a missing=("$@")
 
     echo
-    echo "================ PACKAGE RESOLUTION FAILED ================" | tee -a "$INSTALL_LOG"
+    echo -e "${C_RED}${C_BOLD}================ PACKAGE RESOLUTION FAILED ================${C_RESET}" | tee -a "$INSTALL_LOG"
     echo "Unavailable items:" | tee -a "$INSTALL_LOG"
 
     for item in "${missing[@]}"; do
         echo "  - $item" | tee -a "$INSTALL_LOG"
     done
 
-    echo "===========================================================" | tee -a "$INSTALL_LOG"
+    echo -e "${C_RED}${C_BOLD}===========================================================${C_RESET}" | tee -a "$INSTALL_LOG"
     echo
 }
 
@@ -405,16 +440,22 @@ sync_time() {
 
 select_desktop_environment() {
     echo
-    echo "Select Desktop Environment:"
-    echo "  1) KDE Plasma    [recommended/default]"
-    echo "  2) XFCE"
-    echo "  3) GNOME"
-    echo "  4) LXQt"
-    echo "  5) Minimal X11"
+    echo -e "${C_MAGENTA}${C_BOLD}============================================================${C_RESET}"
+    echo -e "${C_MAGENTA}${C_BOLD}                 SELECT DESKTOP ENVIRONMENT                 ${C_RESET}"
+    echo -e "${C_MAGENTA}${C_BOLD}============================================================${C_RESET}"
+    echo
+    echo -e "  ${C_GREEN}${C_BOLD}[1]${C_RESET} KDE Plasma     ${C_YELLOW}(recommended / default)${C_RESET}"
+    echo -e "  ${C_GREEN}${C_BOLD}[2]${C_RESET} XFCE"
+    echo -e "  ${C_GREEN}${C_BOLD}[3]${C_RESET} GNOME"
+    echo -e "  ${C_GREEN}${C_BOLD}[4]${C_RESET} LXQt"
+    echo -e "  ${C_GREEN}${C_BOLD}[5]${C_RESET} Minimal X11"
+    echo
+    echo -e "${C_CYAN}Enter the number of your choice.${C_RESET}"
+    echo -e "${C_CYAN}Example: to pick option 1 (KDE Plasma), type ${C_BOLD}1${C_RESET}${C_CYAN} and press Enter.${C_RESET}"
     echo
 
     local choice
-    read -r -p "Choice [1]: " choice
+    read -r -p "$(echo -e "${C_BOLD}Your choice [1]: ${C_RESET}")" choice
     choice="${choice:-1}"
 
     case "$choice" in
@@ -424,7 +465,7 @@ select_desktop_environment() {
         4) SELECTED_DE="lxqt" ;;
         5) SELECTED_DE="minimal" ;;
         *)
-            echo "Invalid choice. Using KDE."
+            echo -e "${C_RED}Invalid choice. Using KDE.${C_RESET}"
             SELECTED_DE="kde"
             ;;
     esac
@@ -434,13 +475,15 @@ select_desktop_environment() {
 
 ask_hardware_options() {
     echo
-    echo "GPU option:"
-    echo "  If you are on NVIDIA proprietary driver target, answer yes."
-    echo "  Otherwise no is safer for Intel/AMD/VM."
+    echo -e "${C_MAGENTA}${C_BOLD}------------------------------------------------------------${C_RESET}"
+    echo -e "${C_MAGENTA}${C_BOLD} GPU OPTION${C_RESET}"
+    echo -e "${C_MAGENTA}${C_BOLD}------------------------------------------------------------${C_RESET}"
+    echo -e "  If you are on ${C_YELLOW}NVIDIA${C_RESET} proprietary driver target, answer ${C_GREEN}yes${C_RESET}."
+    echo -e "  Otherwise ${C_GREEN}no${C_RESET} is safer for Intel/AMD/VM."
     echo
 
     local ans
-    read -r -p "Install NVIDIA proprietary packages? [no]: " ans
+    read -r -p "$(echo -e "${C_BOLD}Install NVIDIA proprietary packages? [no]: ${C_RESET}")" ans
     ans="${ans:-no}"
 
     case "$ans" in
@@ -455,7 +498,7 @@ select_disk() {
     WINUX_PHASE="disk-selection"
 
     echo
-    echo "Available disks:"
+    echo -e "${C_MAGENTA}${C_BOLD}Available disks:${C_RESET}"
     lsblk -dpno NAME,SIZE,MODEL,TYPE | awk '$4=="disk"{print}'
     echo
 
@@ -735,21 +778,24 @@ finish_live_install() {
     umount -R "$MNT" || true
 
     echo
-    echo "============================================================"
-    echo "Winux base installation completed."
-    echo "Now reboot. Runtime phase will continue automatically."
+    echo -e "${C_GREEN}${C_BOLD}============================================================${C_RESET}"
+    echo -e "${C_GREEN}${C_BOLD}          Winux base installation completed!               ${C_RESET}"
+    echo -e "${C_GREEN}${C_BOLD}============================================================${C_RESET}"
+    echo -e "${C_CYAN}Now reboot. Runtime phase will continue automatically.${C_RESET}"
     echo
-    echo "After reboot, if runtime fails or you need resume:"
-    echo "  sudo /usr/local/bin/winux-installer.sh --runtime"
+    echo -e "${C_YELLOW}After reboot, if runtime fails or you need resume:${C_RESET}"
+    echo -e "  ${C_BOLD}sudo /usr/local/bin/winux-installer.sh --runtime${C_RESET}"
     echo
-    echo "Logs:"
+    echo -e "${C_BLUE}Logs:${C_RESET}"
     echo "  /var/log/winux-installer.log"
     echo "  /var/log/winux-runtime.log"
-    echo "============================================================"
+    echo -e "${C_GREEN}${C_BOLD}============================================================${C_RESET}"
 }
 
 run_live_install() {
     require_root
+
+    print_banner
 
     WINUX_PHASE="live-install-start"
 
@@ -1181,18 +1227,19 @@ runtime_cleanup_and_mark_done() {
     runtime_log "Runtime phase completed successfully."
 
     echo
-    echo "============================================================"
-    echo "Winux runtime installation completed."
-    echo "Desktop: $WINUX_DE"
-    echo "User: $WINUX_USERNAME"
+    echo -e "${C_GREEN}${C_BOLD}============================================================${C_RESET}"
+    echo -e "${C_GREEN}${C_BOLD}       Winux runtime installation completed!                ${C_RESET}"
+    echo -e "${C_GREEN}${C_BOLD}============================================================${C_RESET}"
+    echo -e "${C_CYAN}Desktop:${C_RESET} $WINUX_DE"
+    echo -e "${C_CYAN}User:${C_RESET}    $WINUX_USERNAME"
     echo
-    echo "Wine launchers:"
+    echo -e "${C_YELLOW}Wine launchers:${C_RESET}"
     echo "  winux-run-app  /path/to/app.exe"
     echo "  winux-run-game /path/to/game.exe"
     echo
-    echo "Logs:"
+    echo -e "${C_BLUE}Logs:${C_RESET}"
     echo "  /var/log/winux-runtime.log"
-    echo "============================================================"
+    echo -e "${C_GREEN}${C_BOLD}============================================================${C_RESET}"
 }
 
 run_runtime() {
@@ -1200,6 +1247,8 @@ run_runtime() {
 
     # Runtime log should capture all output.
     exec > >(tee -a "$RUNTIME_LOG") 2>&1
+
+    print_banner
 
     load_runtime_config
     runtime_prepare
