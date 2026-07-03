@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Winux v0.2 Unified Installer (Run inside Arch Live ISO)
-# Developer: Arash Ghasem
+# Developer: Arash Ghasem Abadi
 #
 # این اسکریپت دو فاز دارد:
 #   فاز 1 (Base)   : نصب پایه آرچ روی دیسک، پارتیشن، GRUB، کاربر.
@@ -273,11 +273,29 @@ HOSTS
     echo "LANG=${LOCALE}" > /mnt/etc/locale.conf
     grep -q "^${LOCALE} UTF-8" /mnt/etc/locale.gen 2>/dev/null || echo "${LOCALE} UTF-8" >> /mnt/etc/locale.gen
 
-    # ۸ب. اسکریپت chroot (فقط دستورات اجرایی، بدون جایگذاری متن پیچیده)
-    # متغیرها از طریق env به chroot پاس داده می‌شوند (arch-chroot از env پشتیبانی می‌کند).
-    cat > /mnt/tmp/winux-chroot.sh <<'CHROOT_SCRIPT'
+    # ۸ب. اسکریپت chroot (فقط دستورات اجرایی)
+    # روش bulletproof: مقادیر را در یک فایل env با %q (shell-safe quoting) می‌نویسیم،
+    # سپس داخل chroot آن را source می‌کنیم. این روش:
+    #   - نیازی به عبور env از arch-chroot ندارد
+    #   - نیازی به sed/escape ندارد
+    #   - برای هر کاراکتری در رمز عبور امن است (/ \ & | $ ` ' ")
+    # توجه: arch-chroot روی /tmp داخل chroot مانت tmpfs می‌زند، پس فایل را در /root می‌نویسیم.
+    mkdir -p /mnt/root
+
+    # نوشتن فایل env با shell-safe quoting (printf %q هر کاراکتر خاص را escape می‌کند)
+    {
+        printf 'TZ=%q\n'   "$TIMEZONE"
+        printf 'NEW_USER=%q\n' "$USERNAME"
+        printf 'NEW_PASS=%q\n' "$PASSWORD"
+    } > /mnt/root/winux-env.sh
+    chmod 600 /mnt/root/winux-env.sh
+
+    cat > /mnt/root/winux-chroot.sh <<'CHROOT_SCRIPT'
 #!/usr/bin/env bash
 set -e
+
+# بارگذاری مقادیر از فایل env (shell-safe)
+source /root/winux-env.sh
 
 # Timezone
 ln -sf "/usr/share/zoneinfo/${TZ}" /etc/localtime
@@ -301,16 +319,14 @@ sed -i 's/GRUB_TIMEOUT_STYLE=menu/GRUB_TIMEOUT_STYLE=hidden/' /etc/default/grub
 grub-mkconfig -o /boot/grub/grub.cfg
 CHROOT_SCRIPT
 
-    chmod +x /mnt/tmp/winux-chroot.sh
+    chmod +x /mnt/root/winux-chroot.sh
 
-    # اجرای اسکریپت داخل chroot با متغیرهای محیطی (env از طریق arch-chroot منتقل می‌شود)
-    # password/user تکی‌خط هستند و در env امن‌اند (نه در سطر دستور sed).
-    if ! env TZ="$TIMEZONE" NEW_USER="$USERNAME" NEW_PASS="$PASSWORD" \
-        arch-chroot /mnt /bin/bash /tmp/winux-chroot.sh; then
-        echo -e "${RED}Chroot configuration failed. See /mnt/tmp/winux-chroot.sh for debug.${NC}" >&2
+    # اجرای اسکریپت داخل chroot (متغیرها از فایل env خوانده می‌شوند، نه از محیط)
+    if ! arch-chroot /mnt /bin/bash /root/winux-chroot.sh; then
+        echo -e "${RED}Chroot configuration failed. See /mnt/root/winux-chroot.sh for debug.${NC}" >&2
         exit 1
     fi
-    rm -f /mnt/tmp/winux-chroot.sh
+    rm -f /mnt/root/winux-chroot.sh /mnt/root/winux-env.sh
 
     # ۹. ساخت سرویس اولین بوت برای اجرای فاز Runtime
     log "Creating first-boot service for runtime phase..."
