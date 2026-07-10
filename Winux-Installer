@@ -711,18 +711,20 @@ select_desktop_environment() {
     echo -e "  ${C_GREEN}${C_BOLD}[5]${C_RESET} Minimal X11"
     echo
 
-    local choice
+    local choice result
     read -r -p "$(echo -e "${C_BOLD}Your choice [1]: ${C_RESET}")" choice
     choice="${choice:-1}"
 
     case "$choice" in
-        1) echo "kde" ;;
-        2) echo "xfce" ;;
-        3) echo "gnome" ;;
-        4) echo "lxqt" ;;
-        5) echo "minimal" ;;
-        *) echo "kde" ;;
+        1) result="kde" ;;
+        2) result="xfce" ;;
+        3) result="gnome" ;;
+        4) result="lxqt" ;;
+        5) result="minimal" ;;
+        *) result="kde" ;;
     esac
+
+    SELECTED_DE="$result"
 }
 
 ask_hardware_options() {
@@ -731,14 +733,16 @@ ask_hardware_options() {
     echo -e "  NVIDIA proprietary? ${C_GREEN}yes${C_RESET}/${C_RED}no${C_RESET}"
     echo
 
-    local ans
+    local ans result
     read -r -p "$(echo -e "${C_BOLD}Install NVIDIA? [no]: ${C_RESET}")" ans
     ans="${ans:-no}"
 
     case "$ans" in
-        y|Y|yes|YES) echo "yes" ;;
-        *) echo "no" ;;
+        y|Y|yes|YES) result="yes" ;;
+        *) result="no" ;;
     esac
+
+    INSTALL_NVIDIA="$result"
 }
 
 select_disk_interactive() {
@@ -775,7 +779,7 @@ select_disk_interactive() {
         local selected_disk="${disk_paths[$((choice-1))]}"
         [[ "$selected_disk" =~ ^/dev/ ]] || selected_disk="/dev/$selected_disk"
         [[ -b "$selected_disk" ]] || { echo "Invalid device"; exit 1; }
-        echo "$selected_disk"
+        SELECTED_DISK="$selected_disk"
     else
         echo "Invalid choice"
         exit 1
@@ -1073,8 +1077,11 @@ run_live_install() {
     
     local selected_de install_nvidia hostname username root_pass user_pass root_b64 user_b64 disk
     
-    selected_de="$(select_desktop_environment)"
-    install_nvidia="$(ask_hardware_options)"
+    select_desktop_environment
+    selected_de="$SELECTED_DE"
+    
+    ask_hardware_options
+    install_nvidia="$INSTALL_NVIDIA"
     
     hostname="$(ask "Hostname" "$HOSTNAME_DEFAULT")"
     username="$(ask "Username" "$USERNAME_DEFAULT")"
@@ -1087,7 +1094,8 @@ run_live_install() {
     root_b64="$(printf '%s' "$root_pass" | base64 -w0)"
     user_b64="$(printf '%s' "$user_pass" | base64 -w0)"
     
-    disk="$(select_disk_interactive)"
+    select_disk_interactive
+    disk="$SELECTED_DISK"
     
     state_set "$STATE_PARTITION" "$INSTALL_LOGGER"
     partition_disk "$disk" "$INSTALL_LOGGER"
