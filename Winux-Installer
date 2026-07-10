@@ -1077,7 +1077,7 @@ run_live_install() {
     install_nvidia="$(ask_hardware_options)"
     
     hostname="$(ask "Hostname" "$HOSTNAME_DEFAULT")"
-    username="$(ask "Username" "$USERNAME_DEFAULT)"
+    username="$(ask "Username" "$USERNAME_DEFAULT")"
     
     echo
     root_pass="$(ask_secret "Root password")"
