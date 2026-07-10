@@ -864,8 +864,13 @@ partition_disk() {
     Logger::info "$logger" "Partitioning: $disk"
     state_set_metadata "selected_disk" "$disk"
     
-    wipefs -af "$disk"
-    sgdisk --zap-all "$disk"
+    # Unmount any mounted partitions
+    umount "${disk}"* 2>/dev/null || true
+    sleep 1
+    
+    # Wipe disk signatures
+    wipefs -af "$disk" 2>/dev/null || true
+    sgdisk --zap-all "$disk" 2>/dev/null || true
     
     parted -s "$disk" mklabel gpt
     parted -s "$disk" mkpart ESP fat32 1MiB 1025MiB
