@@ -961,13 +961,13 @@ cat > /etc/hosts <<HOSTS
 HOSTS
 
 log "Setting root password..."
-echo "root:\$(decode_b64 "\$ROOT_PASS_B64")" | chpasswd
+echo "root:\$(decode_b64 \$ROOT_PASS_B64)" | chpasswd
 
 log "Creating user..."
 if ! id "\$USERNAME" >/dev/null 2>&1; then
     useradd -m -G wheel,audio,video,input,storage,optical,lp,network,power -s /bin/bash "\$USERNAME"
 fi
-echo "\$USERNAME:\$(decode_b64 "\$USER_PASS_B64")" | chpasswd
+echo "\$USERNAME:\$(decode_b64 \$USER_PASS_B64)" | chpasswd
 
 log "Enabling sudo..."
 sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
