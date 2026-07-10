@@ -954,7 +954,7 @@ echo "KEYMAP=\$KEYMAP" > /etc/vconsole.conf
 log "Setting hostname..."
 echo "\$HOSTNAME" > /etc/hostname
 
-cat > /etc/hosts <<HOSTS
+cat > /etc/hosts <<'HOSTS'
 127.0.0.1   localhost
 ::1         localhost
 127.0.1.1   \$HOSTNAME.localdomain \$HOSTNAME
@@ -982,7 +982,7 @@ sed -i 's/^#GRUB_DISABLE_OS_PROBER=.*/GRUB_DISABLE_OS_PROBER=false/' /etc/defaul
 grub-mkconfig -o /boot/grub/grub.cfg
 
 log "Writing config..."
-cat > /etc/winux.conf <<CONF
+cat > /etc/winux.conf <<'CONF'
 WINUX_VERSION="$WINUX_VERSION"
 WINUX_USERNAME="\$USERNAME"
 WINUX_DE="\$DE"
@@ -990,7 +990,7 @@ WINUX_INSTALL_NVIDIA="\$NVIDIA"
 CONF
 
 log "Installing runtime service..."
-cat > /etc/systemd/system/winux-runtime.service <<SERVICE
+cat > /etc/systemd/system/winux-runtime.service <<'SERVICE'
 [Unit]
 Description=Winux Runtime Installer
 After=network-online.target
