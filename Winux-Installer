@@ -1,125 +1,626 @@
 #!/usr/bin/env bash
 # ============================================================
-# Winux Installer v0.5 Final Hardened
-# Arch Linux + selectable DE + Full Wine Stack
+# Winux Installer v0.6.0 All-in-One
+# Arch Linux + selectable DE + Full Wine Stack + Proton
+# Self-contained single script with auto-runtime after first boot
 # Author: Winux Project
-# Mode:
-#   Live ISO: run normally
-#   Installed system runtime: --runtime
 # ============================================================
 
 set -Eeuo pipefail
 
-VERSION="0.5-final"
-HOSTNAME_DEFAULT="winux"
-USERNAME_DEFAULT="winux"
-TIMEZONE_DEFAULT="Asia/Tehran"
-LOCALE_DEFAULT="en_US.UTF-8"
-KEYMAP_DEFAULT="us"
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
-INSTALL_LOG="/var/log/winux-installer.log"
-RUNTIME_LOG="/var/log/winux-runtime.log"
-CONFIG_FILE="/etc/winux.conf"
+# Version information
+readonly WINUX_VERSION="0.6.0"
+readonly WINUX_RELEASE="all-in-one"
 
-MNT="/mnt"
-RUNTIME_SCRIPT="/usr/local/bin/winux-installer.sh"
-RUNTIME_SERVICE="/etc/systemd/system/winux-runtime.service"
+# Default user configuration
+readonly HOSTNAME_DEFAULT="winux"
+readonly USERNAME_DEFAULT="winux"
+readonly TIMEZONE_DEFAULT="Asia/Tehran"
+readonly LOCALE_DEFAULT="en_US.UTF-8"
+readonly KEYMAP_DEFAULT="us"
 
-PACMAN_RETRY_COUNT=5
-PACMAN_RETRY_SLEEP=6
+# System paths
+readonly MNT="/mnt"
+readonly STATE_DIR="/var/lib/winux"
+readonly STATE_FILE="${STATE_DIR}/state"
+readonly INSTALL_LOG="/var/log/winux-installer.log"
+readonly RUNTIME_LOG="/var/log/winux-runtime.log"
+readonly CONFIG_FILE="/etc/winux.conf"
+readonly RUNTIME_SCRIPT="/usr/local/bin/winux-installer.sh"
+readonly RUNTIME_SERVICE="/etc/systemd/system/winux-runtime.service"
 
-SELECTED_DE="kde"
-INSTALL_NVIDIA="no"
+# Reflector configuration
+readonly REFLECTOR_COUNTRIES="United States,Germany,France,Netherlands,United Kingdom,Japan,South Korea,Canada"
+readonly REFLECTOR_PROTOCOL="https"
+readonly REFLECTOR_SORT="rate"
+readonly REFLECTOR_SCORE="10"
+readonly REFLECTOR_LATEST="20"
 
-# -----------------------------
-# Colors (cosmetic only)
-# -----------------------------
+# Retry configuration
+readonly PACMAN_RETRY_COUNT=3
+readonly PACMAN_RETRY_SLEEP=6
+readonly CONNECTION_RETRY_COUNT=5
+readonly CONNECTION_RETRY_DELAY=2
 
+# Network configuration
+readonly CONNECTION_TEST_HOST="archlinux.org"
+readonly CONNECTION_TEST_IP="1.1.1.1"
+readonly CONNECTION_STABILITY_THRESHOLD=3
+readonly CONNECTION_STABILITY_TIMEOUT=5
+
+# Proton configuration
+readonly PROTON_OFFICIAL_URL="https://github.com/ValveSoftware/Proton/releases"
+readonly PROTON_GE_URL="https://github.com/GloriousEggroll/proton-ge-custom/releases"
+readonly STEAM_COMPAT_DIR=".local/share/Steam/compatibilitytools.d"
+
+# System tuning configuration
+readonly VM_MAX_MAP_COUNT=16777216
+readonly FS_FILE_MAX=524288
+readonly NET_CORE_RMEM_MAX=134217728
+readonly NET_CORE_WMEM_MAX=134217728
+readonly NET_IPV4_TCP_WINDOW_SCALING=1
+readonly NET_IPV4_TCP_SACK=1
+readonly NET_IPV4_TCP_FACK=1
+
+# Installation states
+readonly STATE_INIT="init"
+readonly STATE_PARTITION="partition"
+readonly STATE_MOUNT="mount"
+readonly STATE_BASE_INSTALL="base_install"
+readonly STATE_CHROOT="chroot"
+readonly STATE_RUNTIME_PREPARE="runtime_prepare"
+readonly STATE_RUNTIME_CORE="runtime_core"
+readonly STATE_RUNTIME_DE="runtime_de"
+readonly STATE_RUNTIME_WINE="runtime_wine"
+readonly STATE_RUNTIME_PROTON="runtime_proton"
+readonly STATE_RUNTIME_TUNING="runtime_tuning"
+readonly STATE_COMPLETE="complete"
+
+# Color codes (cosmetic only)
 if [[ -t 1 ]]; then
-    C_RESET="\e[0m"
-    C_BOLD="\e[1m"
-    C_RED="\e[31m"
-    C_GREEN="\e[32m"
-    C_YELLOW="\e[33m"
-    C_BLUE="\e[34m"
-    C_MAGENTA="\e[35m"
-    C_CYAN="\e[36m"
-    C_WHITE="\e[97m"
+    readonly C_RESET="\e[0m"
+    readonly C_BOLD="\e[1m"
+    readonly C_RED="\e[31m"
+    readonly C_GREEN="\e[32m"
+    readonly C_YELLOW="\e[33m"
+    readonly C_BLUE="\e[34m"
+    readonly C_MAGENTA="\e[35m"
+    readonly C_CYAN="\e[36m"
+    readonly C_WHITE="\e[97m"
 else
-    C_RESET=""; C_BOLD=""; C_RED=""; C_GREEN=""; C_YELLOW=""
-    C_BLUE=""; C_MAGENTA=""; C_CYAN=""; C_WHITE=""
+    readonly C_RESET=""
+    readonly C_BOLD=""
+    readonly C_RED=""
+    readonly C_GREEN=""
+    readonly C_YELLOW=""
+    readonly C_BLUE=""
+    readonly C_MAGENTA=""
+    readonly C_CYAN=""
+    readonly C_WHITE=""
 fi
 
-print_banner() {
-    echo -e "${C_CYAN}${C_BOLD}"
-    cat <<'EOF'
- _       ___                     ____              __  _
-| |     / (_)___  __  ___  __   / __ \__  ______  / /_(_)___ ___  ___
-| | /| / / / __ \/ / / / |/_/  / /_/ / / / / __ \/ __/ / __ `__ \/ _ \
-| |/ |/ / / / / / /_/ />  <   / _, _/ /_/ / / / / /_/ / / / / / /  __/
-|__/|__/_/_/ /_/\__,_/_/|_|  /_/ |_|\__,_/_/ /_/\__/_/_/ /_/ /_/\___/
+# Package lists
+readonly BASE_PACKAGES=(
+    "base" "base-devel" "linux" "linux-firmware" "linux-headers"
+    "amd-ucode" "intel-ucode" "networkmanager" "sudo" "vim" "nano"
+    "git" "curl" "wget" "bash-completion" "grub" "efibootmgr"
+    "os-prober" "dosfstools" "mtools" "openssh" "pacman-contrib"
+    "reflector" "man-db" "man-pages" "texinfo" "unzip" "zip"
+    "p7zip" "tar" "rsync" "htop" "lsof" "strace" "usbutils"
+    "pciutils" "inetutils" "bind" "arch-install-scripts"
+)
 
+readonly CORE_RUNTIME_PACKAGES=(
+    "xorg-server" "xorg-xinit" "xorg-xrandr" "xorg-xset" "xorg-xsetroot"
+    "xorg-xinput" "xorg-xauth" "xorg-xhost" "xorg-apps" "mesa" "lib32-mesa"
+    "vulkan-icd-loader" "lib32-vulkan-icd-loader" "vulkan-tools"
+    "vulkan-radeon" "lib32-vulkan-radeon" "vulkan-intel" "lib32-vulkan-intel"
+    "alsa-utils" "alsa-plugins" "lib32-alsa-plugins" "pipewire"
+    "pipewire-alsa" "pipewire-pulse" "pipewire-jack" "wireplumber"
+    "gst-plugin-pipewire" "pavucontrol" "bluez" "bluez-utils" "blueman"
+    "cups" "cups-pdf" "avahi" "nss-mdns" "gvfs" "gvfs-mtp"
+    "gvfs-smb" "udisks2" "ntfs-3g" "exfatprogs" "dosfstools" "mtools"
+    "unzip" "zip" "p7zip" "unrar" "wget" "curl" "git" "nano" "vim"
+    "htop" "btop" "fastfetch" "neofetch" "firefox" "noto-fonts"
+    "noto-fonts-cjk" "noto-fonts-emoji" "ttf-dejavu" "ttf-liberation"
+    "ttf-font-awesome"
+)
+
+readonly WINE_CORE_PACKAGES=(
+    "wine" "wine-mono" "wine-gecko" "winetricks" "giflib" "lib32-giflib"
+    "libpng" "lib32-libpng" "libldap" "lib32-libldap" "gnutls" "lib32-gnutls"
+    "mpg123" "lib32-mpg123" "openal" "lib32-openal" "v4l-utils" "lib32-v4l-utils"
+    "libpulse" "lib32-libpulse" "alsa-plugins" "lib32-alsa-plugins" "alsa-lib"
+    "lib32-alsa-lib" "libjpeg-turbo" "lib32-libjpeg-turbo" "sqlite" "lib32-sqlite"
+    "libxcomposite" "lib32-libxcomposite" "libxinerama" "lib32-libxinerama"
+    "ncurses" "lib32-ncurses" "ocl-icd" "lib32-ocl-icd" "libxslt" "lib32-libxslt"
+    "libva" "lib32-libva" "gtk3" "lib32-gtk3" "gst-plugins-base-libs"
+    "lib32-gst-plugins-base-libs" "vulkan-icd-loader" "lib32-vulkan-icd-loader"
+    "mesa" "lib32-mesa" "vkd3d" "lib32-vkd3d" "gamemode" "lib32-gamemode"
+    "mangohud" "lib32-mangohud"
+)
+
+readonly WINE_OPTIONAL_PACKAGES=(
+    "dxvk" "lutris" "bottles" "steam" "protontricks" "cabextract"
+    "samba" "opencl-headers" "vulkan-tools"
+)
+
+readonly NVIDIA_PACKAGES=("nvidia" "nvidia-utils" "lib32-nvidia-utils" "nvidia-settings")
+
+readonly KDE_PACKAGES=(
+    "plasma-desktop" "plasma-workspace" "plasma-systemmonitor" "plasma-pa"
+    "plasma-nm" "plasma-disks" "sddm" "sddm-kcm" "konsole" "dolphin" "kate"
+    "ark" "spectacle" "kcalc" "gwenview" "okular" "powerdevil" "polkit-kde-agent"
+    "xdg-desktop-portal" "xdg-desktop-portal-kde"
+)
+
+readonly XFCE_PACKAGES=("xfce4" "xfce4-goodies" "lightdm" "lightdm-gtk-greeter" "xdg-desktop-portal" "xdg-desktop-portal-gtk")
+
+readonly GNOME_PACKAGES=("gnome" "gnome-tweaks" "gdm" "xdg-desktop-portal" "xdg-desktop-portal-gnome")
+
+readonly LXQT_PACKAGES=("lxqt" "sddm" "xdg-desktop-portal" "xdg-desktop-portal-lxqt")
+
+readonly MINIMAL_PACKAGES=("openbox" "obconf" "tint2" "pcmanfm" "lxappearance" "lightdm" "lightdm-gtk-greeter" "xterm")
+
+# Global logger instances
+declare -g INSTALL_LOGGER=""
+declare -g RUNTIME_LOGGER=""
+
+# ============================================================
+# LOGGER CLASS
+# ============================================================
+
+Logger::new() {
+    local this="$1"
+    local log_file="${2:-$INSTALL_LOG}"
+    local component_name="${3:-Winux}"
+    
+    mkdir -p "$(dirname "$log_file")" 2>/dev/null || true
+    touch "$log_file" 2>/dev/null || true
+    
+    eval "${this}_log_file='$log_file'"
+    eval "${this}_component='$component_name'"
+    eval "${this}_log_level='INFO'"
+}
+
+Logger::_log() {
+    local this="$1"
+    local level="$2"
+    local color="$3"
+    local message="$4"
+    
+    local component log_file timestamp
+    component="$(eval "echo \${${this}_component}")"
+    log_file="$(eval "echo \${${this}_log_file}")"
+    timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+    
+    local log_msg="[${component}][${timestamp}][${level}] ${message}"
+    
+    if [[ -t 1 ]]; then
+        echo -e "${color}${log_msg}${C_RESET}"
+    else
+        echo "$log_msg"
+    fi
+    
+    echo "$log_msg" >> "$log_file" 2>/dev/null || true
+}
+
+Logger::debug() { Logger::_log "$1" "DEBUG" "$C_CYAN" "$2"; }
+Logger::info() { Logger::_log "$1" "INFO" "$C_GREEN" "$2"; }
+Logger::warn() { Logger::_log "$1" "WARN" "$C_YELLOW" "$2"; }
+Logger::error() { Logger::_log "$1" "ERROR" "$C_RED" "$2"; }
+Logger::fatal() { Logger::_log "$1" "FATAL" "${C_BOLD}${C_RED}" "$2"; }
+
+Logger::error_handler() {
+    local this="$1"
+    local exit_code="$2"
+    local line_no="$3"
+    local command="$4"
+    
+    Logger::error "$this" "============================================================"
+    Logger::error "$this" "Failure at line: $line_no"
+    Logger::error "$this" "Exit code: $exit_code"
+    Logger::error "$this" "Command: $command"
+    Logger::error "$this" "Phase hint: ${WINUX_PHASE:-unknown}"
+    Logger::error "$this" "============================================================"
+}
+
+init_install_logger() {
+    INSTALL_LOGGER="install_logger"
+    Logger::new "$INSTALL_LOGGER" "$INSTALL_LOG" "Winux-Installer"
+}
+
+init_runtime_logger() {
+    RUNTIME_LOGGER="runtime_logger"
+    Logger::new "$RUNTIME_LOGGER" "$RUNTIME_LOG" "Winux-Runtime"
+}
+
+setup_error_trap() {
+    local logger="${1:-$INSTALL_LOGGER}"
+    trap 'Logger::error_handler "'"$logger"'" $? "$LINENO" "$BASH_COMMAND"' ERR
+}
+
+retry_with_logging() {
+    local logger="$1"
+    local max_attempts="$2"
+    local delay="$3"
+    shift 3
+    local command=("$@")
+    
+    local attempt=1
+    while (( attempt <= max_attempts )); do
+        if "${command[@]}"; then
+            return 0
+        fi
+        
+        if (( attempt < max_attempts )); then
+            Logger::warn "$logger" "Retry attempt $attempt/$max_attempts for: ${command[*]}"
+            sleep "$delay"
+            ((attempt++))
+        else
+            Logger::error "$logger" "Command failed after $max_attempts attempts: ${command[*]}"
+            return 1
+        fi
+    done
+}
+
+# ============================================================
+# STATE MANAGEMENT
+# ============================================================
+
+state_init() {
+    local logger="${1:-$INSTALL_LOGGER}"
+    
+    mkdir -p "$STATE_DIR"
+    touch "$STATE_FILE"
+    
+    if [[ ! -s "$STATE_FILE" ]]; then
+        echo "current_state=$STATE_INIT" > "$STATE_FILE"
+        echo "start_time=$(date '+%s')" >> "$STATE_FILE"
+        echo "version=$WINUX_VERSION" >> "$STATE_FILE"
+    fi
+    
+    Logger::info "$logger" "State initialized: $STATE_FILE"
+}
+
+state_get_current() {
+    if [[ -f "$STATE_FILE" ]]; then
+        grep '^current_state=' "$STATE_FILE" | cut -d'=' -f2
+    else
+        echo "$STATE_INIT"
+    fi
+}
+
+state_set() {
+    local new_state="$1"
+    local logger="${2:-$INSTALL_LOGGER}"
+    
+    sed -i "s/^current_state=.*/current_state=$new_state/" "$STATE_FILE"
+    echo "${new_state}_time=$(date '+%s')" >> "$STATE_FILE"
+    
+    Logger::info "$logger" "State updated: $new_state"
+}
+
+state_get() {
+    local key="$1"
+    if [[ -f "$STATE_FILE" ]]; then
+        grep "^${key}=" "$STATE_FILE" | cut -d'=' -f2
+    fi
+}
+
+state_set_metadata() {
+    local key="$1"
+    local value="$2"
+    sed -i "/^${key}=/d" "$STATE_FILE"
+    echo "${key}=${value}" >> "$STATE_FILE"
+}
+
+state_check_complete() {
+    [[ "$(state_get_current)" == "$STATE_COMPLETE" ]]
+}
+
+state_is_initialized() {
+    [[ -f "$STATE_FILE" && -s "$STATE_FILE" ]]
+}
+
+state_resume_from() {
+    local current_state
+    local logger="${1:-$INSTALL_LOGGER}"
+    
+    current_state="$(state_get_current)"
+    Logger::info "$logger" "Resuming from state: $current_state"
+    
+    case "$current_state" in
+        "$STATE_INIT") return 0 ;;
+        "$STATE_PARTITION") return 1 ;;
+        "$STATE_MOUNT") return 2 ;;
+        "$STATE_BASE_INSTALL") return 3 ;;
+        "$STATE_CHROOT") return 4 ;;
+        "$STATE_RUNTIME_PREPARE") return 5 ;;
+        "$STATE_RUNTIME_CORE") return 6 ;;
+        "$STATE_RUNTIME_DE") return 7 ;;
+        "$STATE_RUNTIME_WINE") return 8 ;;
+        "$STATE_RUNTIME_PROTON") return 9 ;;
+        "$STATE_RUNTIME_TUNING") return 10 ;;
+        "$STATE_COMPLETE")
+            Logger::warn "$logger" "Installation already completed"
+            return 11
+            ;;
+        *)
+            Logger::warn "$logger" "Unknown state: $current_state, starting fresh"
+            state_set "$STATE_INIT" "$logger"
+            return 0
+            ;;
+    esac
+}
+
+state_reset() {
+    local logger="${1:-$INSTALL_LOGGER}"
+    local force="${2:-false}"
+    
+    Logger::warn "$logger" "RESETTING WINUX INSTALLATION"
+    
+    if [[ "$force" != "true" ]]; then
+        echo
+        echo -e "${C_RED}${C_BOLD}!!! DANGER !!!${C_RESET}"
+        echo -e "${C_RED}This will REVERT ALL CHANGES made by Winux installer${C_RESET}"
+        echo
+        read -r -p "$(echo -e "${C_BOLD}Type EXACTLY 'YES' to continue: ${C_RESET}")" answer
+        [[ "$answer" == "YES" ]] || { Logger::error "$logger" "Reset aborted"; return 1; }
+    fi
+    
+    local selected_disk
+    selected_disk="$(state_get "selected_disk")"
+    
+    umount -R "$MNT" 2>/dev/null || true
+    systemctl disable winux-runtime.service 2>/dev/null || true
+    systemctl stop winux-runtime.service 2>/dev/null || true
+    
+    rm -f "$STATE_FILE"
+    rm -f /var/lib/winux-runtime.done 2>/dev/null || true
+    rm -f "$RUNTIME_SERVICE"
+    rm -f "$RUNTIME_SCRIPT"
+    rm -f "$CONFIG_FILE"
+    rm -f "$INSTALL_LOG"
+    rm -f "$RUNTIME_LOG"
+    
+    if [[ -n "$selected_disk" && -b "$selected_disk" ]]; then
+        wipefs -af "$selected_disk" 2>/dev/null || true
+        sgdisk --zap-all "$selected_disk" 2>/dev/null || true
+    fi
+    
+    rm -rf "$STATE_DIR"
+    Logger::info "$logger" "Reset completed"
+    return 0
+}
+
+state_validate() {
+    local logger="${1:-$INSTALL_LOGGER}"
+    
+    if ! state_is_initialized; then
+        state_init "$logger"
+        return 1
+    fi
+    
+    local version
+    version="$(state_get "version")"
+    
+    if [[ "$version" != "$WINUX_VERSION" ]]; then
+        Logger::warn "$logger" "Version mismatch: state=$version, current=$WINUX_VERSION"
+    fi
+    
+    return 0
+}
+
+state_show() {
+    if ! state_is_initialized; then
+        echo "State file not found"
+        return 1
+    fi
+    
+    echo "============================================================"
+    echo "Winux Installation State"
+    echo "============================================================"
+    cat "$STATE_FILE"
+    echo "============================================================"
+}
+
+# ============================================================
+# NETWORK FUNCTIONS
+# ============================================================
+
+check_connection_stability() {
+    local logger="${1:-$INSTALL_LOGGER}"
+    local max_attempts="${CONNECTION_RETRY_COUNT}"
+    local base_delay="${CONNECTION_RETRY_DELAY}"
+    local threshold="${CONNECTION_STABILITY_THRESHOLD}"
+    local timeout="${CONNECTION_STABILITY_TIMEOUT}"
+    
+    Logger::info "$logger" "Checking connection stability..."
+    
+    local attempt=1 stable_count=0 delay="$base_delay"
+    
+    while (( attempt <= max_attempts )); do
+        if ping -c 1 -W "$timeout" "$CONNECTION_TEST_HOST" >/dev/null 2>&1; then
+            ((stable_count++))
+            if (( stable_count >= threshold )); then
+                Logger::info "$logger" "Connection stable after $attempt attempts"
+                return 0
+            fi
+        elif ping -c 1 -W "$timeout" "$CONNECTION_TEST_IP" >/dev/null 2>&1; then
+            ((stable_count++))
+            if (( stable_count >= threshold )); then
+                Logger::info "$logger" "Connection stable via IP after $attempt attempts"
+                return 0
+            fi
+        else
+            stable_count=0
+        fi
+        
+        if (( attempt < max_attempts )); then
+            Logger::warn "$logger" "Connection unstable, waiting ${delay}s..."
+            sleep "$delay"
+            delay=$((delay * 2))
+            ((attempt++))
+        else
+            Logger::error "$logger" "Connection failed stability check"
+            return 1
+        fi
+    done
+}
+
+check_internet() {
+    local logger="${1:-$INSTALL_LOGGER}"
+    
+    Logger::info "$logger" "Checking internet connectivity..."
+    
+    if ping -c 2 "$CONNECTION_TEST_HOST" >/dev/null 2>&1; then
+        Logger::info "$logger" "Internet OK"
+        return 0
+    elif ping -c 2 "$CONNECTION_TEST_IP" >/dev/null 2>&1; then
+        Logger::info "$logger" "Internet OK via IP"
+        return 0
+    else
+        Logger::error "$logger" "No internet connectivity"
+        return 1
+    fi
+}
+
+configure_reflector() {
+    local logger="${1:-$INSTALL_LOGGER}"
+    
+    Logger::info "$logger" "Configuring reflector..."
+    
+    if ! command -v reflector >/dev/null 2>&1; then
+        pacman -S --needed --noconfirm reflector || return 1
+    fi
+    
+    if ! check_connection_stability "$logger"; then
+        write_fallback_mirrorlist "$logger"
+        return 1
+    fi
+    
+    if reflector \
+        --country "$REFLECTOR_COUNTRIES" \
+        --protocol "$REFLECTOR_PROTOCOL" \
+        --sort "$REFLECTOR_SORT" \
+        --score "$REFLECTOR_SCORE" \
+        --latest "$REFLECTOR_LATEST" \
+        --save /etc/pacman.d/mirrorlist; then
+        Logger::info "$logger" "Reflector completed"
+        return 0
+    else
+        write_fallback_mirrorlist "$logger"
+        return 1
+    fi
+}
+
+write_fallback_mirrorlist() {
+    local logger="${1:-$INSTALL_LOGGER}"
+    
+    Logger::warn "$logger" "Writing fallback mirrorlist..."
+    
+    cat > /etc/pacman.d/mirrorlist <<'EOF'
+Server = https://mirror.rackspace.com/archlinux/$repo/os/$arch
+Server = https://mirror.leaseweb.net/archlinux/$repo/os/$arch
+Server = https://ftp.halifax.rwth-aachen.de/archlinux/$repo/os/$arch
+Server = https://mirror.sunred.org/archlinux/$repo/os/$arch
+Server = https://mirrors.kernel.org/archlinux/$repo/os/$arch
+Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
 EOF
-    echo -e "${C_RESET}${C_YELLOW}${C_BOLD}          Winux Installer v${VERSION}${C_RESET}"
-    echo -e "${C_BLUE}     Arch Linux + Desktop Environment + Wine Runtime${C_RESET}"
-    echo -e "${C_MAGENTA}------------------------------------------------------------${C_RESET}"
-    echo
 }
 
-# -----------------------------
-# Logging
-# -----------------------------
-
-mkdir -p /var/log
-
-log() {
-    local msg="$*"
-    echo -e "[Winux][$(date '+%Y-%m-%d %H:%M:%S')] $msg" | tee -a "$INSTALL_LOG"
+harden_pacman_conf() {
+    local logger="${1:-$INSTALL_LOGGER}"
+    local target="${2:-}"
+    
+    local conf_file="/etc/pacman.conf"
+    [[ -n "$target" ]] && conf_file="${target}/etc/pacman.conf"
+    
+    if grep -q '^#ParallelDownloads' "$conf_file"; then
+        sed -i 's/^#ParallelDownloads.*/ParallelDownloads = 5/' "$conf_file"
+    elif ! grep -q '^ParallelDownloads' "$conf_file"; then
+        sed -i '/^\[options\]/a ParallelDownloads = 5' "$conf_file"
+    else
+        sed -i 's/^ParallelDownloads.*/ParallelDownloads = 5/' "$conf_file"
+    fi
+    
+    if grep -q '^#Color' "$conf_file"; then
+        sed -i 's/^#Color/Color/' "$conf_file"
+    fi
+    
+    if ! grep -q '^ILoveCandy' "$conf_file"; then
+        sed -i '/^Color/a ILoveCandy' "$conf_file" || true
+    fi
 }
 
-runtime_log() {
-    local msg="$*"
-    echo -e "[Winux Runtime][$(date '+%Y-%m-%d %H:%M:%S')] $msg" | tee -a "$RUNTIME_LOG"
+enable_multilib() {
+    local logger="${1:-$INSTALL_LOGGER}"
+    local target="${2:-}"
+    
+    local conf_file="/etc/pacman.conf"
+    [[ -n "$target" ]] && conf_file="${target}/etc/pacman.conf"
+    
+    if grep -q '^\[multilib\]' "$conf_file"; then
+        return 0
+    fi
+    
+    if sed -i '/^\#\[multilib\]/,+1 s/^\#//' "$conf_file" 2>/dev/null; then
+        Logger::info "$logger" "Multilib enabled"
+    else
+        cat >> "$conf_file" <<'EOF'
+
+[multilib]
+Include = /etc/pacman.d/mirrorlist
+EOF
+    fi
 }
 
-die() {
-    local msg="$*"
-    echo
-    echo "============================================================" | tee -a "$INSTALL_LOG"
-    echo "[FATAL] $msg" | tee -a "$INSTALL_LOG"
-    echo "============================================================" | tee -a "$INSTALL_LOG"
-    exit 1
+pacman_refresh() {
+    local logger="${1:-$INSTALL_LOGGER}"
+    
+    Logger::info "$logger" "Refreshing pacman database..."
+    
+    rm -f /var/lib/pacman/db.lck 2>/dev/null || true
+    rm -f /var/cache/pacman/pkg/*.part 2>/dev/null || true
+    
+    if ! check_connection_stability "$logger"; then
+        return 1
+    fi
+    
+    retry_with_logging "$logger" "$PACMAN_RETRY_COUNT" "$PACMAN_RETRY_SLEEP" pacman -Syy --noconfirm
 }
 
-on_error() {
-    local exit_code=$?
-    local line_no=${1:-unknown}
-    local cmd=${2:-unknown}
-    echo
-    echo "============================================================" | tee -a "$INSTALL_LOG"
-    echo "[ERROR] Failure at line: $line_no" | tee -a "$INSTALL_LOG"
-    echo "[ERROR] Exit code: $exit_code" | tee -a "$INSTALL_LOG"
-    echo "[ERROR] Command: $cmd" | tee -a "$INSTALL_LOG"
-    echo "[ERROR] Phase hint: ${WINUX_PHASE:-unknown}" | tee -a "$INSTALL_LOG"
-    echo "============================================================" | tee -a "$INSTALL_LOG"
-    exit "$exit_code"
+pacman_sanity_check() {
+    local logger="${1:-$INSTALL_LOGGER}"
+    
+    Logger::info "$logger" "Running pacman sanity check..."
+    
+    for pkg in filesystem bash pacman; do
+        pacman -Si "$pkg" >/dev/null 2>&1 || { Logger::error "$logger" "Cannot see package: $pkg"; return 1; }
+    done
+    
+    Logger::info "$logger" "Pacman sanity check passed"
 }
 
-trap 'on_error "$LINENO" "$BASH_COMMAND"' ERR
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
 
 require_root() {
     if [[ "${EUID}" -ne 0 ]]; then
-        die "This script must be run as root."
+        echo "[FATAL] This script must be run as root"
+        exit 1
     fi
 }
 
 command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
-
-# -----------------------------
-# Basic helpers
-# -----------------------------
 
 ask() {
     local prompt="$1"
@@ -162,296 +663,52 @@ ask_secret() {
 
 confirm_danger() {
     local prompt="$1"
-    local answer
     echo
     echo -e "${C_RED}${C_BOLD}!!! DANGER !!!${C_RESET}"
     echo -e "${C_RED}${prompt}${C_RESET}"
     read -r -p "$(echo -e "${C_BOLD}Type EXACTLY 'YES' to continue: ${C_RESET}")" answer
-    [[ "$answer" == "YES" ]] || die "User aborted."
+    [[ "$answer" == "YES" ]] || { echo "Aborted"; exit 1; }
 }
 
-# -----------------------------
-# Mirror hardening
-# -----------------------------
+print_banner() {
+    echo -e "${C_CYAN}${C_BOLD}"
+    cat <<'EOF'
+ _       ___                     ____              __  _
+| |     / (_)___  __  ___  __   / __ \__  ______  / /_(_)___ ___  ___
+| | /| / / / __ \/ / / / |/_/  / /_/ / / / / __ \/ __/ / __ `__ \/ _ \
+| |/ |/ / / / / / /_/ />  <   / _, _/ /_/ / / / / /_/ / / / / / /  __/
+|__/|__/_/_/ /_/\__,_/_/|_|  /_/ |_|\__,_/_/ /_/\__/_/_/ /_/ /_/\___/
 
-write_hardened_mirrorlist() {
-    WINUX_PHASE="mirror-hardening"
-
-    log "Writing hardened mirrorlist..."
-
-    cat > /etc/pacman.d/mirrorlist <<'EOF'
-Server = https://mirror.rackspace.com/archlinux/$repo/os/$arch
-Server = https://mirror.leaseweb.net/archlinux/$repo/os/$arch
-Server = https://ftp.halifax.rwth-aachen.de/archlinux/$repo/os/$arch
-Server = https://mirror.sunred.org/archlinux/$repo/os/$arch
-Server = https://mirrors.kernel.org/archlinux/$repo/os/$arch
-Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
 EOF
-
-    log "Mirrorlist updated."
-}
-
-harden_pacman_conf() {
-    WINUX_PHASE="pacman-conf-hardening"
-
-    log "Hardening pacman.conf..."
-
-    if ! grep -q '^ParallelDownloads' /etc/pacman.conf; then
-        sed -i 's/^#ParallelDownloads.*/ParallelDownloads = 5/' /etc/pacman.conf || true
-    else
-        sed -i 's/^ParallelDownloads.*/ParallelDownloads = 5/' /etc/pacman.conf
-    fi
-
-    if grep -q '^#Color' /etc/pacman.conf; then
-        sed -i 's/^#Color/Color/' /etc/pacman.conf
-    fi
-
-    if ! grep -q '^ILoveCandy' /etc/pacman.conf; then
-        sed -i '/^Color/a ILoveCandy' /etc/pacman.conf || true
-    fi
-}
-
-enable_multilib() {
-    WINUX_PHASE="enable-multilib"
-
-    log "Enabling multilib repository..."
-
-    if grep -q '^\[multilib\]' /etc/pacman.conf; then
-        log "multilib already enabled."
-    else
-        sed -i '/^\#\[multilib\]/,+1 s/^\#//' /etc/pacman.conf || true
-    fi
-
-    if ! grep -q '^\[multilib\]' /etc/pacman.conf; then
-        cat >> /etc/pacman.conf <<'EOF'
-
-[multilib]
-Include = /etc/pacman.d/mirrorlist
-EOF
-    fi
-}
-
-pacman_refresh() {
-    WINUX_PHASE="pacman-refresh"
-
-    log "Refreshing pacman database..."
-    rm -f /var/lib/pacman/db.lck || true
-    rm -f /var/cache/pacman/pkg/*.part || true
-
-    pacman -Syy --noconfirm | tee -a "$INSTALL_LOG"
-}
-
-pacman_sanity_check() {
-    WINUX_PHASE="pacman-sanity-check"
-
-    log "Running pacman mirror sanity check..."
-
-    local test_pkgs=(
-        "filesystem"
-        "bash"
-        "pacman"
-    )
-
-    for pkg in "${test_pkgs[@]}"; do
-        log "Checking repository visibility for: $pkg"
-        pacman -Si "$pkg" >/dev/null 2>&1 || die "Repository sanity check failed. Cannot see package: $pkg"
-    done
-
-    log "Pacman sanity check passed."
-}
-
-retry_cmd() {
-    local n=1
-    local max="$PACMAN_RETRY_COUNT"
-    local delay="$PACMAN_RETRY_SLEEP"
-
-    until "$@"; do
-        local exit_code=$?
-
-        if (( n >= max )); then
-            log "Command failed after $n attempts: $*"
-            return "$exit_code"
-        fi
-
-        log "Command failed attempt $n/$max: $*"
-        log "Cleaning partial downloads and refreshing database before retry..."
-        rm -f /var/cache/pacman/pkg/*.part || true
-        rm -f /var/lib/pacman/db.lck || true
-        sleep "$delay"
-
-        pacman -Syy --noconfirm || true
-
-        ((n++))
-    done
-}
-
-retry_pacman_install() {
-    WINUX_PHASE="pacman-install"
-    retry_cmd pacman -S --needed --noconfirm "$@"
-}
-
-# -----------------------------
-# Package / group resolver
-# -----------------------------
-
-is_pkg_available() {
-    local item="$1"
-    pacman -Si "$item" >/dev/null 2>&1
-}
-
-is_group_available() {
-    local item="$1"
-    pacman -Sg "$item" >/dev/null 2>&1
-}
-
-print_unavailable_report() {
-    local -a missing=("$@")
-
-    echo
-    echo -e "${C_RED}${C_BOLD}================ PACKAGE RESOLUTION FAILED ================${C_RESET}" | tee -a "$INSTALL_LOG"
-    echo "Unavailable items:" | tee -a "$INSTALL_LOG"
-
-    for item in "${missing[@]}"; do
-        echo "  - $item" | tee -a "$INSTALL_LOG"
-    done
-
-    echo -e "${C_RED}${C_BOLD}===========================================================${C_RESET}" | tee -a "$INSTALL_LOG"
+    echo -e "${C_RESET}${C_YELLOW}${C_BOLD}          Winux Installer v${WINUX_VERSION}${C_RESET}"
+    echo -e "${C_BLUE}     Arch Linux + Desktop Environment + Wine Runtime${C_RESET}"
+    echo -e "${C_MAGENTA}------------------------------------------------------------${C_RESET}"
     echo
 }
-
-adaptive_install() {
-    WINUX_PHASE="adaptive-install"
-
-    local label="$1"
-    shift
-
-    local -a items=("$@")
-    local -a pkgs=()
-    local -a groups=()
-    local -a missing=()
-
-    log "Resolving install batch: $label"
-
-    for item in "${items[@]}"; do
-        [[ -z "$item" ]] && continue
-
-        if is_pkg_available "$item"; then
-            log "Package OK: $item"
-            pkgs+=("$item")
-        elif is_group_available "$item"; then
-            log "Group OK: $item"
-            groups+=("$item")
-        else
-            log "Unavailable: $item"
-            missing+=("$item")
-        fi
-    done
-
-    if (( ${#missing[@]} > 0 )); then
-        print_unavailable_report "${missing[@]}"
-        die "Some packages/groups are unavailable. See report above."
-    fi
-
-    if (( ${#groups[@]} > 0 )); then
-        log "Installing groups for batch: $label"
-        retry_pacman_install "${groups[@]}"
-    fi
-
-    if (( ${#pkgs[@]} > 0 )); then
-        log "Installing packages for batch: $label"
-        retry_pacman_install "${pkgs[@]}"
-    fi
-
-    log "Batch installed successfully: $label"
-}
-
-adaptive_install_optional() {
-    WINUX_PHASE="adaptive-install-optional"
-
-    local label="$1"
-    shift
-
-    local -a items=("$@")
-    local -a available=()
-    local -a skipped=()
-
-    log "Resolving optional batch: $label"
-
-    for item in "${items[@]}"; do
-        [[ -z "$item" ]] && continue
-
-        if is_pkg_available "$item" || is_group_available "$item"; then
-            available+=("$item")
-            log "Optional available: $item"
-        else
-            skipped+=("$item")
-            log "Optional skipped, unavailable: $item"
-        fi
-    done
-
-    if (( ${#available[@]} > 0 )); then
-        adaptive_install "$label" "${available[@]}"
-    fi
-
-    if (( ${#skipped[@]} > 0 )); then
-        log "Optional unavailable items in $label:"
-        for item in "${skipped[@]}"; do
-            log "  - $item"
-        done
-    fi
-}
-
-# -----------------------------
-# Live ISO install phase
-# -----------------------------
 
 check_boot_mode() {
-    WINUX_PHASE="boot-mode-check"
-
     if [[ ! -d /sys/firmware/efi/efivars ]]; then
-        die "This installer currently expects UEFI boot. Boot the Arch ISO in UEFI mode."
-    fi
-
-    log "UEFI mode detected."
-}
-
-check_internet() {
-    WINUX_PHASE="network-check"
-
-    log "Checking internet connectivity..."
-
-    if ping -c 2 archlinux.org >/dev/null 2>&1; then
-        log "Internet OK."
-    elif ping -c 2 1.1.1.1 >/dev/null 2>&1; then
-        log "Internet OK via IP, DNS may be weak but continuing."
-    else
-        die "No internet connectivity."
+        echo "[FATAL] This installer expects UEFI boot"
+        exit 1
     fi
 }
 
 sync_time() {
-    WINUX_PHASE="time-sync"
-
-    log "Enabling NTP..."
+    local logger="${1:-$INSTALL_LOGGER}"
+    Logger::info "$logger" "Enabling NTP..."
     timedatectl set-ntp true || true
     sleep 2
-    timedatectl status | tee -a "$INSTALL_LOG" || true
 }
 
 select_desktop_environment() {
     echo
-    echo -e "${C_MAGENTA}${C_BOLD}============================================================${C_RESET}"
-    echo -e "${C_MAGENTA}${C_BOLD}                 SELECT DESKTOP ENVIRONMENT                 ${C_RESET}"
-    echo -e "${C_MAGENTA}${C_BOLD}============================================================${C_RESET}"
+    echo -e "${C_MAGENTA}${C_BOLD}SELECT DESKTOP ENVIRONMENT${C_RESET}"
     echo
-    echo -e "  ${C_GREEN}${C_BOLD}[1]${C_RESET} KDE Plasma     ${C_YELLOW}(recommended / default)${C_RESET}"
+    echo -e "  ${C_GREEN}${C_BOLD}[1]${C_RESET} KDE Plasma     ${C_YELLOW}(default)${C_RESET}"
     echo -e "  ${C_GREEN}${C_BOLD}[2]${C_RESET} XFCE"
     echo -e "  ${C_GREEN}${C_BOLD}[3]${C_RESET} GNOME"
     echo -e "  ${C_GREEN}${C_BOLD}[4]${C_RESET} LXQt"
     echo -e "  ${C_GREEN}${C_BOLD}[5]${C_RESET} Minimal X11"
-    echo
-    echo -e "${C_CYAN}Enter the number of your choice.${C_RESET}"
-    echo -e "${C_CYAN}Example: to pick option 1 (KDE Plasma), type ${C_BOLD}1${C_RESET}${C_CYAN} and press Enter.${C_RESET}"
     echo
 
     local choice
@@ -459,73 +716,50 @@ select_desktop_environment() {
     choice="${choice:-1}"
 
     case "$choice" in
-        1) SELECTED_DE="kde" ;;
-        2) SELECTED_DE="xfce" ;;
-        3) SELECTED_DE="gnome" ;;
-        4) SELECTED_DE="lxqt" ;;
-        5) SELECTED_DE="minimal" ;;
-        *)
-            echo -e "${C_RED}Invalid choice. Using KDE.${C_RESET}"
-            SELECTED_DE="kde"
-            ;;
+        1) echo "kde" ;;
+        2) echo "xfce" ;;
+        3) echo "gnome" ;;
+        4) echo "lxqt" ;;
+        5) echo "minimal" ;;
+        *) echo "kde" ;;
     esac
-
-    log "Selected DE: $SELECTED_DE"
 }
 
 ask_hardware_options() {
     echo
-    echo -e "${C_MAGENTA}${C_BOLD}------------------------------------------------------------${C_RESET}"
-    echo -e "${C_MAGENTA}${C_BOLD} GPU OPTION${C_RESET}"
-    echo -e "${C_MAGENTA}${C_BOLD}------------------------------------------------------------${C_RESET}"
-    echo -e "  If you are on ${C_YELLOW}NVIDIA${C_RESET} proprietary driver target, answer ${C_GREEN}yes${C_RESET}."
-    echo -e "  Otherwise ${C_GREEN}no${C_RESET} is safer for Intel/AMD/VM."
+    echo -e "${C_MAGENTA}${C_BOLD}GPU OPTION${C_RESET}"
+    echo -e "  NVIDIA proprietary? ${C_GREEN}yes${C_RESET}/${C_RED}no${C_RESET}"
     echo
 
     local ans
-    read -r -p "$(echo -e "${C_BOLD}Install NVIDIA proprietary packages? [no]: ${C_RESET}")" ans
+    read -r -p "$(echo -e "${C_BOLD}Install NVIDIA? [no]: ${C_RESET}")" ans
     ans="${ans:-no}"
 
     case "$ans" in
-        y|Y|yes|YES) INSTALL_NVIDIA="yes" ;;
-        *) INSTALL_NVIDIA="no" ;;
+        y|Y|yes|YES) echo "yes" ;;
+        *) echo "no" ;;
     esac
-
-    log "Install NVIDIA: $INSTALL_NVIDIA"
 }
 
-# در تابع run_live_install، خط disk="$(select_disk)" رو حذف کن و بجاش:
-
 select_disk_interactive() {
-    WINUX_PHASE="disk-selection"
-
     echo
-    echo -e "${C_MAGENTA}${C_BOLD}============================================================${C_RESET}"
-    echo -e "${C_MAGENTA}${C_BOLD}                    SELECT TARGET DISK                       ${C_RESET}"
-    echo -e "${C_MAGENTA}${C_BOLD}============================================================${C_RESET}"
+    echo -e "${C_MAGENTA}${C_BOLD}SELECT TARGET DISK${C_RESET}"
     echo
 
-    local -a disk_paths=()
-    local -a disk_info=()
-    local line path size model type
+    local -a disk_paths=() disk_info=()
+    local line path type
 
-    # فیلتر با grep به جای awk (قوی‌تر)
     while IFS= read -r line; do
-        # فرمت: /dev/sda 68.5G VBOX_HARDDISK disk
         path=$(echo "$line" | awk '{print $1}')
-        type=$(echo "$line" | awk '{print $NF}')  # آخرین ستون
-        
+        type=$(echo "$line" | awk '{print $NF}')
         [[ "$type" == "disk" ]] || continue
-        
         disk_paths+=("$path")
         disk_info+=("$line")
     done < <(lsblk -dno NAME,SIZE,MODEL,TYPE 2>/dev/null | grep -E '^\S+\s+\S+.*disk$')
 
     if (( ${#disk_paths[@]} == 0 )); then
-        echo -e "${C_RED}[ERROR] No disks detected.${C_RESET}"
-        echo -e "${C_YELLOW}Debug output:${C_RESET}"
-        lsblk -dno NAME,SIZE,MODEL,TYPE
-        die "No disks found. Check the output above."
+        echo -e "${C_RED}[ERROR] No disks detected${C_RESET}"
+        exit 1
     fi
 
     local i=1
@@ -535,54 +769,110 @@ select_disk_interactive() {
     done
 
     echo
-    echo -e "${C_CYAN}Enter the number [1-${#disk_paths[@]}]:${C_RESET}"
-    
-    local choice
-    while true; do
-        read -r -p "$(echo -e "${C_BOLD}Your choice: ${C_RESET}")" choice
+    read -r -p "$(echo -e "${C_BOLD}Your choice: ${C_RESET}")" choice
 
-        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#disk_paths[@]} )); then
-            SELECTED_DISK="${disk_paths[$((choice-1))]}"
-            
-            # اضافه کردن /dev/ اگه نباشه
-            [[ "$SELECTED_DISK" =~ ^/dev/ ]] || SELECTED_DISK="/dev/$SELECTED_DISK"
-            
-            if [[ ! -b "$SELECTED_DISK" ]]; then
-                die "Invalid block device: $SELECTED_DISK"
-            fi
-            
-            log "Selected disk: $SELECTED_DISK"
-            echo
-            return 0
-        else
-            echo -e "${C_RED}Invalid. Enter 1-${#disk_paths[@]}.${C_RESET}"
-        fi
-    done
+    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#disk_paths[@]} )); then
+        local selected_disk="${disk_paths[$((choice-1))]}"
+        [[ "$selected_disk" =~ ^/dev/ ]] || selected_disk="/dev/$selected_disk"
+        [[ -b "$selected_disk" ]] || { echo "Invalid device"; exit 1; }
+        echo "$selected_disk"
+    else
+        echo "Invalid choice"
+        exit 1
+    fi
 }
 
+is_pkg_available() {
+    pacman -Si "$1" >/dev/null 2>&1
+}
+
+is_group_available() {
+    pacman -Sg "$1" >/dev/null 2>&1
+}
+
+adaptive_install() {
+    local label="$1"
+    shift
+    local logger="${1:-$INSTALL_LOGGER}"
+    shift
+    
+    local -a items=("$@") pkgs=() groups=() missing=()
+
+    Logger::info "$logger" "Resolving: $label"
+
+    for item in "${items[@]}"; do
+        [[ -z "$item" ]] && continue
+        if is_pkg_available "$item"; then
+            pkgs+=("$item")
+        elif is_group_available "$item"; then
+            groups+=("$item")
+        else
+            missing+=("$item")
+        fi
+    done
+
+    if (( ${#missing[@]} > 0 )); then
+        Logger::error "$logger" "Unavailable: ${missing[*]}"
+        exit 1
+    fi
+
+    if (( ${#groups[@]} > 0 )); then
+        retry_with_logging "$logger" "$PACMAN_RETRY_COUNT" "$PACMAN_RETRY_SLEEP" pacman -S --needed --noconfirm "${groups[@]}"
+    fi
+
+    if (( ${#pkgs[@]} > 0 )); then
+        retry_with_logging "$logger" "$PACMAN_RETRY_COUNT" "$PACMAN_RETRY_SLEEP" pacman -S --needed --noconfirm "${pkgs[@]}"
+    fi
+}
+
+adaptive_install_optional() {
+    local label="$1"
+    shift
+    local logger="${1:-$INSTALL_LOGGER}"
+    shift
+    
+    local -a items=("$@") available=()
+
+    for item in "${items[@]}"; do
+        [[ -z "$item" ]] && continue
+        if is_pkg_available "$item" || is_group_available "$item"; then
+            available+=("$item")
+        fi
+    done
+
+    if (( ${#available[@]} > 0 )); then
+        adaptive_install "$label" "$logger" "${available[@]}"
+    fi
+}
+
+# ============================================================
+# INSTALLER FUNCTIONS
+# ============================================================
 
 partition_disk() {
-    WINUX_PHASE="partitioning"
-
     local disk="$1"
-
+    local logger="${2:-$INSTALL_LOGGER}"
+    
+    WINUX_PHASE="partitioning"
+    
     confirm_danger "This will ERASE ALL DATA on: $disk"
-
-    log "Partitioning disk: $disk"
-
+    
+    Logger::info "$logger" "Partitioning: $disk"
+    state_set_metadata "selected_disk" "$disk"
+    
     wipefs -af "$disk"
     sgdisk --zap-all "$disk"
-
+    
     parted -s "$disk" mklabel gpt
     parted -s "$disk" mkpart ESP fat32 1MiB 1025MiB
     parted -s "$disk" set 1 esp on
     parted -s "$disk" mkpart ROOT ext4 1025MiB 100%
-
+    
     partprobe "$disk"
     sleep 2
-
+    
     local efi_part root_part
-
+    
     if [[ "$disk" =~ nvme|mmcblk ]]; then
         efi_part="${disk}p1"
         root_part="${disk}p2"
@@ -590,190 +880,113 @@ partition_disk() {
         efi_part="${disk}1"
         root_part="${disk}2"
     fi
-
-    [[ -b "$efi_part" ]] || die "EFI partition not found: $efi_part"
-    [[ -b "$root_part" ]] || die "Root partition not found: $root_part"
-
-    log "Formatting EFI: $efi_part"
+    
+    [[ -b "$efi_part" ]] || { Logger::fatal "$logger" "EFI not found: $efi_part"; exit 1; }
+    [[ -b "$root_part" ]] || { Logger::fatal "$logger" "Root not found: $root_part"; exit 1; }
+    
     mkfs.fat -F32 "$efi_part"
-
-    log "Formatting root: $root_part"
     mkfs.ext4 -F "$root_part"
-
+    
     mkdir -p "$MNT"
-
-    log "Mounting root: $root_part"
     mount "$root_part" "$MNT"
-
     mkdir -p "$MNT/boot"
-    log "Mounting EFI: $efi_part -> $MNT/boot"
     mount "$efi_part" "$MNT/boot"
-
-    echo "$root_part"
+    
+    state_set_metadata "efi_part" "$efi_part"
+    state_set_metadata "root_part" "$root_part"
 }
 
 pacstrap_base() {
+    local logger="${1:-$INSTALL_LOGGER}"
+    
     WINUX_PHASE="pacstrap"
-
-    log "Installing base system with pacstrap..."
-
-    pacstrap -K "$MNT" \
-        base \
-        base-devel \
-        linux \
-        linux-firmware \
-        linux-headers \
-        amd-ucode \
-        intel-ucode \
-        networkmanager \
-        sudo \
-        vim \
-        nano \
-        git \
-        curl \
-        wget \
-        bash-completion \
-        grub \
-        efibootmgr \
-        os-prober \
-        dosfstools \
-        mtools \
-        openssh \
-        pacman-contrib \
-        reflector \
-        man-db \
-        man-pages \
-        texinfo \
-        unzip \
-        zip \
-        p7zip \
-        tar \
-        rsync \
-        htop \
-        lsof \
-        strace \
-        usbutils \
-        pciutils \
-        inetutils \
-        bind \
-        arch-install-scripts | tee -a "$INSTALL_LOG"
-
-    log "Generating fstab..."
+    
+    if ! check_connection_stability "$logger"; then
+        Logger::fatal "$logger" "Unstable connection"
+        exit 1
+    fi
+    
+    pacstrap -K "$MNT" "${BASE_PACKAGES[@]}" | tee -a "$INSTALL_LOG"
     genfstab -U "$MNT" >> "$MNT/etc/fstab"
 }
 
 write_target_pacman_config() {
-    WINUX_PHASE="target-pacman-config"
-
-    log "Copying hardened pacman configuration to target..."
+    local logger="${1:-$INSTALL_LOGGER}"
+    
     cp /etc/pacman.d/mirrorlist "$MNT/etc/pacman.d/mirrorlist"
-
-    if grep -q '^#Color' "$MNT/etc/pacman.conf"; then
-        sed -i 's/^#Color/Color/' "$MNT/etc/pacman.conf"
-    fi
-
-    if grep -q '^#ParallelDownloads' "$MNT/etc/pacman.conf"; then
-        sed -i 's/^#ParallelDownloads.*/ParallelDownloads = 5/' "$MNT/etc/pacman.conf"
-    elif ! grep -q '^ParallelDownloads' "$MNT/etc/pacman.conf"; then
-        sed -i '/^\[options\]/a ParallelDownloads = 5' "$MNT/etc/pacman.conf"
-    fi
-
-    if ! grep -q '^ILoveCandy' "$MNT/etc/pacman.conf"; then
-        sed -i '/^Color/a ILoveCandy' "$MNT/etc/pacman.conf" || true
-    fi
-
-    if ! grep -q '^\[multilib\]' "$MNT/etc/pacman.conf"; then
-        cat >> "$MNT/etc/pacman.conf" <<'EOF'
-
-[multilib]
-Include = /etc/pacman.d/mirrorlist
-EOF
-    fi
+    harden_pacman_conf "$logger" "$MNT"
+    enable_multilib "$logger" "$MNT"
 }
 
 write_chroot_script() {
-    WINUX_PHASE="write-chroot-script"
-
-    local hostname="$1"
-    local username="$2"
-    local root_b64="$3"
-    local user_b64="$4"
-    local selected_de="$5"
-    local install_nvidia="$6"
-
-    log "Writing chroot configuration script..."
-
-    cat > "$MNT/root/winux-chroot.sh" <<EOF
+    local hostname="$1" username="$2" root_b64="$3" user_b64="$4"
+    local selected_de="$5" install_nvidia="$6"
+    local logger="${7:-$INSTALL_LOGGER}"
+    
+    cat > "$MNT/root/winux-chroot.sh" <<CHROOT_EOF
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-HOSTNAME_VALUE='$hostname'
-USERNAME_VALUE='$username'
+HOSTNAME='$hostname'
+USERNAME='$username'
 ROOT_PASS_B64='$root_b64'
 USER_PASS_B64='$user_b64'
-TIMEZONE_VALUE='$TIMEZONE_DEFAULT'
-LOCALE_VALUE='$LOCALE_DEFAULT'
-KEYMAP_VALUE='$KEYMAP_DEFAULT'
-SELECTED_DE='$selected_de'
-INSTALL_NVIDIA='$install_nvidia'
+TIMEZONE='$TIMEZONE_DEFAULT'
+LOCALE='$LOCALE_DEFAULT'
+KEYMAP='$KEYMAP_DEFAULT'
+DE='$selected_de'
+NVIDIA='$install_nvidia'
 
-log() {
-    echo "[Winux Chroot][\$(date '+%Y-%m-%d %H:%M:%S')] \$*"
-}
+log() { echo "[Winux Chroot][\$(date '+%Y-%m-%d %H:%M:%S')] \$*"; }
 
-decode_b64() {
-    printf '%s' "\$1" | base64 -d
-}
+decode_b64() { printf '%s' "\$1" | base64 -d; }
 
 log "Setting timezone..."
-ln -sf "/usr/share/zoneinfo/\$TIMEZONE_VALUE" /etc/localtime
+ln -sf "/usr/share/zoneinfo/\$TIMEZONE" /etc/localtime
 hwclock --systohc || true
 
 log "Configuring locale..."
-sed -i "s/^#\${LOCALE_VALUE}/\${LOCALE_VALUE}/" /etc/locale.gen
+sed -i "s/^#\${LOCALE}/\${LOCALE}/" /etc/locale.gen
 locale-gen
-echo "LANG=\$LOCALE_VALUE" > /etc/locale.conf
-echo "KEYMAP=\$KEYMAP_VALUE" > /etc/vconsole.conf
+echo "LANG=\$LOCALE" > /etc/locale.conf
+echo "KEYMAP=\$KEYMAP" > /etc/vconsole.conf
 
 log "Setting hostname..."
-echo "\$HOSTNAME_VALUE" > /etc/hostname
+echo "\$HOSTNAME" > /etc/hostname
 
 cat > /etc/hosts <<HOSTS
 127.0.0.1   localhost
 ::1         localhost
-127.0.1.1   \$HOSTNAME_VALUE.localdomain \$HOSTNAME_VALUE
+127.0.1.1   \$HOSTNAME.localdomain \$HOSTNAME
 HOSTS
 
 log "Setting root password..."
 echo "root:\$(decode_b64 "\$ROOT_PASS_B64")" | chpasswd
 
 log "Creating user..."
-if ! id "\$USERNAME_VALUE" >/dev/null 2>&1; then
-    useradd -m -G wheel,audio,video,input,storage,optical,lp,network,power -s /bin/bash "\$USERNAME_VALUE"
+if ! id "\$USERNAME" >/dev/null 2>&1; then
+    useradd -m -G wheel,audio,video,input,storage,optical,lp,network,power -s /bin/bash "\$USERNAME"
 fi
+echo "\$USERNAME:\$(decode_b64 "\$USER_PASS_B64")" | chpasswd
 
-echo "\$USERNAME_VALUE:\$(decode_b64 "\$USER_PASS_B64")" | chpasswd
-
-log "Enabling sudo for wheel..."
+log "Enabling sudo..."
 sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
 
-log "Enabling core services..."
+log "Enabling services..."
 systemctl enable NetworkManager.service
 systemctl enable sshd.service
 
-log "Installing GRUB for UEFI..."
+log "Installing GRUB..."
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=Winux --recheck
-
-log "Generating GRUB config..."
 sed -i 's/^#GRUB_DISABLE_OS_PROBER=.*/GRUB_DISABLE_OS_PROBER=false/' /etc/default/grub || true
 grub-mkconfig -o /boot/grub/grub.cfg
 
-log "Writing Winux config..."
+log "Writing config..."
 cat > /etc/winux.conf <<CONF
-WINUX_VERSION="$VERSION"
-WINUX_USERNAME="\$USERNAME_VALUE"
-WINUX_DE="\$SELECTED_DE"
-WINUX_INSTALL_NVIDIA="\$INSTALL_NVIDIA"
+WINUX_VERSION="$WINUX_VERSION"
+WINUX_USERNAME="\$USERNAME"
+WINUX_DE="\$DE"
+WINUX_INSTALL_NVIDIA="\$NVIDIA"
 CONF
 
 log "Installing runtime service..."
@@ -798,531 +1011,431 @@ SERVICE
 
 systemctl enable winux-runtime.service
 
-log "Chroot phase completed."
-EOF
+log "Chroot completed."
+CHROOT_EOF
 
     chmod +x "$MNT/root/winux-chroot.sh"
 }
 
 install_self_to_target() {
-    WINUX_PHASE="install-self"
-
-    log "Installing this script into target system..."
-
+    local logger="${1:-$INSTALL_LOGGER}"
+    
     mkdir -p "$MNT/usr/local/bin"
     cp "$0" "$MNT$RUNTIME_SCRIPT"
     chmod +x "$MNT$RUNTIME_SCRIPT"
 }
 
 run_chroot_script() {
-    WINUX_PHASE="run-chroot"
-
-    log "Running chroot script..."
+    local logger="${1:-$INSTALL_LOGGER}"
     arch-chroot "$MNT" /root/winux-chroot.sh | tee -a "$INSTALL_LOG"
 }
 
 finish_live_install() {
-    WINUX_PHASE="finish-live-install"
-
-    log "Base installation completed."
-    log "Unmounting target..."
+    local logger="${1:-$INSTALL_LOGGER}"
+    
     umount -R "$MNT" || true
-
+    state_set "$STATE_COMPLETE" "$logger"
+    
     echo
-    echo -e "${C_GREEN}${C_BOLD}============================================================${C_RESET}"
-    echo -e "${C_GREEN}${C_BOLD}          Winux base installation completed!               ${C_RESET}"
-    echo -e "${C_GREEN}${C_BOLD}============================================================${C_RESET}"
-    echo -e "${C_CYAN}Now reboot. Runtime phase will continue automatically.${C_RESET}"
+    echo -e "${C_GREEN}${C_BOLD}Base installation completed!${C_RESET}"
+    echo -e "${C_CYAN}Reboot now. Runtime will run automatically.${C_RESET}"
     echo
-    echo -e "${C_YELLOW}After reboot, if runtime fails or you need resume:${C_RESET}"
-    echo -e "  ${C_BOLD}sudo /usr/local/bin/winux-installer.sh --runtime${C_RESET}"
-    echo
-    echo -e "${C_BLUE}Logs:${C_RESET}"
-    echo "  /var/log/winux-installer.log"
-    echo "  /var/log/winux-runtime.log"
-    echo -e "${C_GREEN}${C_BOLD}============================================================${C_RESET}"
 }
 
 run_live_install() {
     require_root
-
+    init_install_logger
+    setup_error_trap "$INSTALL_LOGGER"
+    
     print_banner
-
     WINUX_PHASE="live-install-start"
-
-    log "Starting Winux Installer v$VERSION"
-
+    
+    Logger::info "$INSTALL_LOGGER" "Starting Winux Installer v${WINUX_VERSION}"
+    
+    state_init "$INSTALL_LOGGER"
+    state_validate "$INSTALL_LOGGER"
+    
+    if state_check_complete; then
+        Logger::warn "$INSTALL_LOGGER" "Already completed. Use --reset."
+        return 0
+    fi
+    
+    state_resume_from "$INSTALL_LOGGER" >/dev/null
+    
     check_boot_mode
-    check_internet
-    sync_time
-
-    write_hardened_mirrorlist
-    harden_pacman_conf
-    pacman_refresh
-    pacman_sanity_check
-
-    select_desktop_environment
-    ask_hardware_options
-
-    local hostname username root_pass user_pass root_b64 user_b64 disk
-
+    check_internet "$INSTALL_LOGGER"
+    sync_time "$INSTALL_LOGGER"
+    
+    configure_reflector "$INSTALL_LOGGER"
+    harden_pacman_conf "$INSTALL_LOGGER"
+    pacman_refresh "$INSTALL_LOGGER"
+    pacman_sanity_check "$INSTALL_LOGGER"
+    
+    local selected_de install_nvidia hostname username root_pass user_pass root_b64 user_b64 disk
+    
+    selected_de="$(select_desktop_environment)"
+    install_nvidia="$(ask_hardware_options)"
+    
     hostname="$(ask "Hostname" "$HOSTNAME_DEFAULT")"
-    username="$(ask "Username" "$USERNAME_DEFAULT")"
-
+    username="$(ask "Username" "$USERNAME_DEFAULT)"
+    
     echo
     root_pass="$(ask_secret "Root password")"
     echo
-    user_pass="$(ask_secret "Password for user '$username'")"
-
+    user_pass="$(ask_secret "Password for '$username'")"
+    
     root_b64="$(printf '%s' "$root_pass" | base64 -w0)"
     user_b64="$(printf '%s' "$user_pass" | base64 -w0)"
-
-    select_disk_interactive
-    disk="$SELECTED_DISK"
-
-    partition_disk "$disk"
-    pacstrap_base
-    write_target_pacman_config
-    install_self_to_target
-    write_chroot_script "$hostname" "$username" "$root_b64" "$user_b64" "$SELECTED_DE" "$INSTALL_NVIDIA"
-    run_chroot_script
-    finish_live_install
+    
+    disk="$(select_disk_interactive)"
+    
+    state_set "$STATE_PARTITION" "$INSTALL_LOGGER"
+    partition_disk "$disk" "$INSTALL_LOGGER"
+    
+    state_set "$STATE_MOUNT" "$INSTALL_LOGGER"
+    
+    state_set "$STATE_BASE_INSTALL" "$INSTALL_LOGGER"
+    pacstrap_base "$INSTALL_LOGGER"
+    
+    write_target_pacman_config "$INSTALL_LOGGER"
+    install_self_to_target "$INSTALL_LOGGER"
+    
+    state_set "$STATE_CHROOT" "$INSTALL_LOGGER"
+    write_chroot_script "$hostname" "$username" "$root_b64" "$user_b64" "$selected_de" "$install_nvidia" "$INSTALL_LOGGER"
+    run_chroot_script "$INSTALL_LOGGER"
+    
+    finish_live_install "$INSTALL_LOGGER"
 }
 
-# -----------------------------
-# Runtime phase
-# -----------------------------
+# ============================================================
+# RUNTIME FUNCTIONS
+# ============================================================
 
 load_runtime_config() {
+    local logger="${1:-$RUNTIME_LOGGER}"
+    
     if [[ -f "$CONFIG_FILE" ]]; then
-        # shellcheck disable=SC1090
         source "$CONFIG_FILE"
+        Logger::info "$logger" "Config loaded from $CONFIG_FILE"
     fi
-
+    
     WINUX_USERNAME="${WINUX_USERNAME:-$USERNAME_DEFAULT}"
     WINUX_DE="${WINUX_DE:-kde}"
     WINUX_INSTALL_NVIDIA="${WINUX_INSTALL_NVIDIA:-no}"
 }
 
 runtime_prepare() {
+    local logger="${1:-$RUNTIME_LOGGER}"
+    
     WINUX_PHASE="runtime-prepare"
-
+    
     mkdir -p /var/log
     touch "$RUNTIME_LOG"
-
-    runtime_log "Starting Winux runtime v$VERSION"
-
-    check_internet
-    sync_time
-
-    write_hardened_mirrorlist
-    harden_pacman_conf
-    enable_multilib
-    pacman_refresh
-    pacman_sanity_check
+    
+    Logger::info "$logger" "Starting Winux runtime v${WINUX_VERSION}"
+    
+    check_internet "$logger"
+    sync_time "$logger"
+    
+    configure_reflector "$logger"
+    harden_pacman_conf "$logger"
+    enable_multilib "$logger"
+    pacman_refresh "$logger"
+    pacman_sanity_check "$logger"
+    
+    state_set "$STATE_RUNTIME_PREPARE" "$logger"
 }
 
 install_core_runtime() {
+    local logger="${1:-$RUNTIME_LOGGER}"
+    
     WINUX_PHASE="runtime-core"
-
-    local -a pkgs=(
-        xorg-server
-        xorg-xinit
-        xorg-xrandr
-        xorg-xset
-        xorg-xsetroot
-        xorg-xinput
-        xorg-xauth
-        xorg-xhost
-        xorg-apps
-        mesa
-        lib32-mesa
-        vulkan-icd-loader
-        lib32-vulkan-icd-loader
-        vulkan-tools
-        vulkan-radeon
-        lib32-vulkan-radeon
-        vulkan-intel
-        lib32-vulkan-intel
-        alsa-utils
-        alsa-plugins
-        lib32-alsa-plugins
-        pipewire
-        pipewire-alsa
-        pipewire-pulse
-        pipewire-jack
-        wireplumber
-        gst-plugin-pipewire
-        pavucontrol
-        bluez
-        bluez-utils
-        blueman
-        cups
-        cups-pdf
-        avahi
-        nss-mdns
-        gvfs
-        gvfs-mtp
-        gvfs-smb
-        udisks2
-        ntfs-3g
-        exfatprogs
-        dosfstools
-        mtools
-        unzip
-        zip
-        p7zip
-        unrar
-        wget
-        curl
-        git
-        nano
-        vim
-        htop
-        btop
-        fastfetch
-        neofetch
-        firefox
-        noto-fonts
-        noto-fonts-cjk
-        noto-fonts-emoji
-        ttf-dejavu
-        ttf-liberation
-        ttf-font-awesome
-    )
-
-    adaptive_install "core-runtime" "${pkgs[@]}"
-
+    
+    adaptive_install "core-runtime" "$logger" "${CORE_RUNTIME_PACKAGES[@]}"
+    
     systemctl enable bluetooth.service || true
     systemctl enable cups.service || true
     systemctl enable avahi-daemon.service || true
+    
+    state_set "$STATE_RUNTIME_CORE" "$logger"
 }
 
 install_de_runtime() {
+    local logger="${1:-$RUNTIME_LOGGER}"
+    
     WINUX_PHASE="runtime-de"
-
+    
     case "$WINUX_DE" in
         kde)
-            local -a kde_pkgs=(
-                plasma-desktop
-                plasma-workspace
-                plasma-systemmonitor
-                plasma-pa
-                plasma-nm
-                plasma-disks
-                sddm
-                sddm-kcm
-                konsole
-                dolphin
-                kate
-                ark
-                spectacle
-                kcalc
-                gwenview
-                okular
-                powerdevil
-                polkit-kde-agent
-                xdg-desktop-portal
-                xdg-desktop-portal-kde
-            )
-            adaptive_install "desktop-kde" "${kde_pkgs[@]}"
+            adaptive_install "desktop-kde" "$logger" "${KDE_PACKAGES[@]}"
             systemctl enable sddm.service
             ;;
-
         xfce)
-            local -a xfce_pkgs=(
-                xfce4
-                xfce4-goodies
-                lightdm
-                lightdm-gtk-greeter
-                xdg-desktop-portal
-                xdg-desktop-portal-gtk
-            )
-            adaptive_install "desktop-xfce" "${xfce_pkgs[@]}"
+            adaptive_install "desktop-xfce" "$logger" "${XFCE_PACKAGES[@]}"
             systemctl enable lightdm.service
             ;;
-
         gnome)
-            local -a gnome_pkgs=(
-                gnome
-                gnome-tweaks
-                gdm
-                xdg-desktop-portal
-                xdg-desktop-portal-gnome
-            )
-            adaptive_install "desktop-gnome" "${gnome_pkgs[@]}"
+            adaptive_install "desktop-gnome" "$logger" "${GNOME_PACKAGES[@]}"
             systemctl enable gdm.service
             ;;
-
         lxqt)
-            local -a lxqt_pkgs=(
-                lxqt
-                sddm
-                xdg-desktop-portal
-                xdg-desktop-portal-lxqt
-            )
-            adaptive_install "desktop-lxqt" "${lxqt_pkgs[@]}"
+            adaptive_install "desktop-lxqt" "$logger" "${LXQT_PACKAGES[@]}"
             systemctl enable sddm.service
             ;;
-
         minimal)
-            local -a minimal_pkgs=(
-                openbox
-                obconf
-                tint2
-                pcmanfm
-                lxappearance
-                lightdm
-                lightdm-gtk-greeter
-                xterm
-            )
-            adaptive_install "desktop-minimal" "${minimal_pkgs[@]}"
+            adaptive_install "desktop-minimal" "$logger" "${MINIMAL_PACKAGES[@]}"
             systemctl enable lightdm.service
             ;;
-
         *)
-            runtime_log "Unknown DE '$WINUX_DE', falling back to KDE."
             WINUX_DE="kde"
             install_de_runtime
             ;;
     esac
+    
+    state_set "$STATE_RUNTIME_DE" "$logger"
 }
 
 install_nvidia_if_requested() {
+    local logger="${1:-$RUNTIME_LOGGER}"
+    
     WINUX_PHASE="runtime-nvidia"
-
+    
     if [[ "$WINUX_INSTALL_NVIDIA" != "yes" ]]; then
-        runtime_log "Skipping NVIDIA proprietary packages."
         return 0
     fi
-
-    local -a nvidia_pkgs=(
-        nvidia
-        nvidia-utils
-        lib32-nvidia-utils
-        nvidia-settings
-    )
-
-    adaptive_install_optional "nvidia-proprietary" "${nvidia_pkgs[@]}"
+    
+    adaptive_install_optional "nvidia" "$logger" "${NVIDIA_PACKAGES[@]}"
 }
 
 install_full_wine_stack() {
+    local logger="${1:-$RUNTIME_LOGGER}"
+    
     WINUX_PHASE="runtime-wine-full"
+    
+    adaptive_install "wine-core" "$logger" "${WINE_CORE_PACKAGES[@]}"
+    adaptive_install_optional "wine-optional" "$logger" "${WINE_OPTIONAL_PACKAGES[@]}"
+    
+    state_set "$STATE_RUNTIME_WINE" "$logger"
+}
 
-    runtime_log "Installing full Wine stack..."
+install_proton() {
+    local logger="${1:-$RUNTIME_LOGGER}"
+    local user="$WINUX_USERNAME"
+    
+    WINUX_PHASE="runtime-proton"
+    
+    local home_dir
+    home_dir="$(getent passwd "$user" | cut -d: -f6 || true)"
+    
+    if [[ -z "$home_dir" || ! -d "$home_dir" ]]; then
+        Logger::warn "$logger" "User home not found"
+        return 0
+    fi
+    
+    local compat_dir="$home_dir/$STEAM_COMPAT_DIR"
+    mkdir -p "$compat_dir"
+    
+    Logger::info "$logger" "Installing Proton..."
+    cd "$compat_dir" || return 1
+    
+    local proton_url
+    proton_url=$(curl -s "https://api.github.com/repos/ValveSoftware/Proton/releases/latest" | grep "browser_download_url" | grep "Proton" | head -n 1 | cut -d '"' -f 4)
+    
+    if [[ -n "$proton_url" ]]; then
+        local proton_file
+        proton_file=$(basename "$proton_url")
+        
+        if [[ ! -d "${proton_file%.tar.gz}" ]]; then
+            Logger::info "$logger" "Downloading $proton_file..."
+            curl -L "$proton_url" -o "$proton_file"
+            tar -xzf "$proton_file"
+            rm -f "$proton_file"
+        fi
+    fi
+    
+    local ge_url
+    ge_url=$(curl -s "https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases/latest" | grep "browser_download_url" | grep "tar.gz" | head -n 1 | cut -d '"' -f 4)
+    
+    if [[ -n "$ge_url" ]]; then
+        local ge_file
+        ge_file=$(basename "$ge_url")
+        
+        if [[ ! -d "${ge_file%.tar.gz}" ]]; then
+            Logger::info "$logger" "Downloading $ge_file..."
+            curl -L "$ge_url" -o "$ge_file"
+            tar -xzf "$ge_file"
+            rm -f "$ge_file"
+        fi
+    fi
+    
+    chown -R "$user:$user" "$compat_dir"
+    
+    state_set "$STATE_RUNTIME_PROTON" "$logger"
+}
 
-    local -a wine_core=(
-        wine
-        wine-mono
-        wine-gecko
-        winetricks
-        giflib
-        lib32-giflib
-        libpng
-        lib32-libpng
-        libldap
-        lib32-libldap
-        gnutls
-        lib32-gnutls
-        mpg123
-        lib32-mpg123
-        openal
-        lib32-openal
-        v4l-utils
-        lib32-v4l-utils
-        libpulse
-        lib32-libpulse
-        alsa-plugins
-        lib32-alsa-plugins
-        alsa-lib
-        lib32-alsa-lib
-        libjpeg-turbo
-        lib32-libjpeg-turbo
-        sqlite
-        lib32-sqlite
-        libxcomposite
-        lib32-libxcomposite
-        libxinerama
-        lib32-libxinerama
-        ncurses
-        lib32-ncurses
-        ocl-icd
-        lib32-ocl-icd
-        libxslt
-        lib32-libxslt
-        libva
-        lib32-libva
-        gtk3
-        lib32-gtk3
-        gst-plugins-base-libs
-        lib32-gst-plugins-base-libs
-        vulkan-icd-loader
-        lib32-vulkan-icd-loader
-        mesa
-        lib32-mesa
-        vkd3d
-        lib32-vkd3d
-        gamemode
-        lib32-gamemode
-        mangohud
-        lib32-mangohud
-    )
-
-    adaptive_install "wine-full-core" "${wine_core[@]}"
-
-    # Optional gaming/runtime packages that may vary by repo date.
-    local -a wine_optional=(
-        dxvk
-        lutris
-        bottles
-        steam
-        protontricks
-        cabextract
-        samba
-        opencl-headers
-        vulkan-tools
-    )
-
-    adaptive_install_optional "wine-full-optional" "${wine_optional[@]}"
-
-    runtime_log "Wine full stack installed."
+apply_system_tuning() {
+    local logger="${1:-$RUNTIME_LOGGER}"
+    
+    WINUX_PHASE="runtime-tuning"
+    
+    cat > /etc/sysctl.d/99-winux-gaming.conf <<EOF
+vm.max_map_count = $VM_MAX_MAP_COUNT
+fs.file-max = $FS_FILE_MAX
+net.core.rmem_max = $NET_CORE_RMEM_MAX
+net.core.wmem_max = $NET_CORE_WMEM_MAX
+net.ipv4.tcp_window_scaling = $NET_IPV4_TCP_WINDOW_SCALING
+net.ipv4.tcp_sack = $NET_IPV4_TCP_SACK
+net.ipv4.tcp_fack = $NET_IPV4_TCP_FACK
+net.ipv4.tcp_congestion_control = bbr
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_no_metrics_save = 1
+EOF
+    
+    sysctl -p /etc/sysctl.d/99-winux-gaming.conf
+    
+    cat > /etc/security/limits.d/99-winux-gaming.conf <<EOF
+* soft nofile 524288
+* hard nofile 524288
+* soft nproc 524288
+* hard nproc 524288
+EOF
+    
+    state_set "$STATE_RUNTIME_TUNING" "$logger"
 }
 
 create_winux_user_runtime() {
-    WINUX_PHASE="runtime-user-prefix"
-
+    local logger="${1:-$RUNTIME_LOGGER}"
     local user="$WINUX_USERNAME"
+    
+    WINUX_PHASE="runtime-user-prefix"
+    
     local home_dir
-
     home_dir="$(getent passwd "$user" | cut -d: -f6 || true)"
-
+    
     if [[ -z "$home_dir" || ! -d "$home_dir" ]]; then
-        runtime_log "User home not found for '$user'. Skipping user Wine prefix setup."
         return 0
     fi
-
-    runtime_log "Creating Winux user runtime for: $user"
-
-    install -d -m 755 "$home_dir/.winux"
-    install -d -m 755 "$home_dir/.winux/prefixes"
-    install -d -m 755 "$home_dir/.winux/prefixes/apps"
-    install -d -m 755 "$home_dir/.winux/prefixes/games"
-    install -d -m 755 "$home_dir/.local/bin"
-    install -d -m 755 "$home_dir/Desktop"
-
+    
+    install -d -m 755 "$home_dir/.winux"/{prefixes/{apps,games}} "$home_dir/.local/bin" "$home_dir/Desktop"
+    
     cat > "$home_dir/.local/bin/winux-run-app" <<'EOF'
 #!/usr/bin/env bash
-set -euo pipefail
-
 export WINEPREFIX="$HOME/.winux/prefixes/apps"
 export WINEARCH=win64
-
-if [[ $# -lt 1 ]]; then
-    echo "Usage: winux-run-app file.exe"
-    exit 1
-fi
-
 wine "$@"
 EOF
-
+    
     cat > "$home_dir/.local/bin/winux-run-game" <<'EOF'
 #!/usr/bin/env bash
-set -euo pipefail
-
 export WINEPREFIX="$HOME/.winux/prefixes/games"
 export WINEARCH=win64
 export DXVK_LOG_LEVEL=none
 export WINEDEBUG=-all
-
 if command -v gamemoderun >/dev/null 2>&1; then
     exec gamemoderun wine "$@"
 else
     exec wine "$@"
 fi
 EOF
-
-    chmod +x "$home_dir/.local/bin/winux-run-app"
-    chmod +x "$home_dir/.local/bin/winux-run-game"
-
-    cat > "$home_dir/Desktop/Winux Wine App.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=Winux Wine App Terminal
-Comment=Open terminal for Winux Wine app prefix
-Exec=sh -c 'cd "\$HOME" && WINEPREFIX="\$HOME/.winux/prefixes/apps" WINEARCH=win64 konsole || xterm'
-Icon=wine
-Terminal=false
-Categories=Utility;
-EOF
-
+    
+    chmod +x "$home_dir/.local/bin/winux-run-app" "$home_dir/.local/bin/winux-run-game"
+    
     chown -R "$user:$user" "$home_dir/.winux" "$home_dir/.local" "$home_dir/Desktop"
-
-    runtime_log "Initializing Wine prefixes. This may take a while..."
-
+    
     sudo -u "$user" env WINEPREFIX="$home_dir/.winux/prefixes/apps" WINEARCH=win64 wineboot -u || true
     sudo -u "$user" env WINEPREFIX="$home_dir/.winux/prefixes/games" WINEARCH=win64 wineboot -u || true
-
-    runtime_log "User Wine prefixes created."
 }
 
 runtime_cleanup_and_mark_done() {
-    WINUX_PHASE="runtime-finish"
-
-    runtime_log "Cleaning package cache..."
+    local logger="${1:-$RUNTIME_LOGGER}"
+    
     pacman -Sc --noconfirm || true
-
+    
     mkdir -p /var/lib
     touch /var/lib/winux-runtime.done
-
+    
     systemctl disable winux-runtime.service || true
-
-    runtime_log "Runtime phase completed successfully."
-
+    
+    state_set "$STATE_COMPLETE" "$logger"
+    
     echo
-    echo -e "${C_GREEN}${C_BOLD}============================================================${C_RESET}"
-    echo -e "${C_GREEN}${C_BOLD}       Winux runtime installation completed!                ${C_RESET}"
-    echo -e "${C_GREEN}${C_BOLD}============================================================${C_RESET}"
-    echo -e "${C_CYAN}Desktop:${C_RESET} $WINUX_DE"
-    echo -e "${C_CYAN}User:${C_RESET}    $WINUX_USERNAME"
+    echo -e "${C_GREEN}${C_BOLD}Runtime installation completed!${C_RESET}"
+    echo -e "${C_CYAN}Desktop: $WINUX_DE | User: $WINUX_USERNAME${C_RESET}"
     echo
-    echo -e "${C_YELLOW}Wine launchers:${C_RESET}"
-    echo "  winux-run-app  /path/to/app.exe"
-    echo "  winux-run-game /path/to/game.exe"
-    echo
-    echo -e "${C_BLUE}Logs:${C_RESET}"
-    echo "  /var/log/winux-runtime.log"
-    echo -e "${C_GREEN}${C_BOLD}============================================================${C_RESET}"
 }
 
 run_runtime() {
     require_root
-
-    # Runtime log should capture all output.
+    
+    init_runtime_logger
+    setup_error_trap "$RUNTIME_LOGGER"
+    
     exec > >(tee -a "$RUNTIME_LOG") 2>&1
-
+    
     print_banner
-
-    load_runtime_config
-    runtime_prepare
-    install_core_runtime
-    install_de_runtime
-    install_nvidia_if_requested
-    install_full_wine_stack
-    create_winux_user_runtime
-    runtime_cleanup_and_mark_done
+    
+    load_runtime_config "$RUNTIME_LOGGER"
+    
+    state_init "$RUNTIME_LOGGER"
+    state_validate "$RUNTIME_LOGGER"
+    
+    if state_check_complete; then
+        Logger::warn "$RUNTIME_LOGGER" "Already completed"
+        return 0
+    fi
+    
+    state_resume_from "$RUNTIME_LOGGER" >/dev/null
+    
+    runtime_prepare "$RUNTIME_LOGGER"
+    install_core_runtime "$RUNTIME_LOGGER"
+    install_de_runtime "$RUNTIME_LOGGER"
+    install_nvidia_if_requested "$RUNTIME_LOGGER"
+    install_full_wine_stack "$RUNTIME_LOGGER"
+    install_proton "$RUNTIME_LOGGER"
+    apply_system_tuning "$RUNTIME_LOGGER"
+    create_winux_user_runtime "$RUNTIME_LOGGER"
+    runtime_cleanup_and_mark_done "$RUNTIME_LOGGER"
 }
 
-# -----------------------------
-# Main
-# -----------------------------
+# ============================================================
+# MAIN ENTRY POINT
+# ============================================================
+
+show_version() {
+    echo "Winux Installer v${WINUX_VERSION} (${WINUX_RELEASE})"
+}
+
+show_usage() {
+    echo "Usage: $0 [OPTION]"
+    echo
+    echo "Options:"
+    echo "  (none)      Run live ISO installation"
+    echo "  --runtime   Run runtime phase (after reboot)"
+    echo "  --reset     Reset installation"
+    echo "  --state     Show installation state"
+    echo "  --version   Show version"
+    echo "  --help      Show this help"
+    echo
+}
 
 main() {
     case "${1:-}" in
         --runtime)
             run_runtime
             ;;
+        --reset)
+            require_root
+            init_install_logger
+            state_reset "$INSTALL_LOGGER" "false"
+            ;;
+        --state)
+            state_show
+            ;;
         --version)
-            echo "Winux Installer v$VERSION"
+            show_version
+            ;;
+        --help|-h)
+            show_usage
             ;;
         *)
             run_live_install
